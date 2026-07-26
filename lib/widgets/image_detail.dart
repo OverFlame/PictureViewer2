@@ -3,10 +3,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../db/image_dao.dart';
+import '../db/tag_dao.dart';
 import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
 
-/// 右侧图片详情面板（显示选中图片的信息）
+/// 右侧详情面板：选中图片信息 + 标签编辑
 class ImageDetail extends StatelessWidget {
   const ImageDetail({super.key});
 
@@ -16,51 +18,32 @@ class ImageDetail extends StatelessWidget {
     final image = appState.selectedImage;
 
     if (image == null) {
-      return _buildEmpty();
+      return Container(
+        color: Catppuccin.crust,
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.image_outlined, size: 48, color: Catppuccin.surface1),
+              SizedBox(height: 12),
+              Text(
+                '选择一张图片以查看详情',
+                style: TextStyle(color: Catppuccin.overlay1, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      );
     }
 
-    final file = File(image.path);
-    final exists = file.existsSync();
-    final stat = exists ? file.statSync() : null;
-
     return Container(
-      color: Catppuccin.mantle,
+      color: Catppuccin.crust,
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 顶部标题栏
-          Container(
-            height: 44,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: Catppuccin.surface0)),
-            ),
-            child: Row(
-              children: [
-                const Text(
-                  '图片详情',
-                  style: TextStyle(
-                    color: Catppuccin.text,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const Spacer(),
-                if (!exists)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Catppuccin.red.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Text(
-                      '文件已丢失',
-                      style: TextStyle(color: Catppuccin.red, fontSize: 10),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-
+          // 标题
+          _panelHeader(),
+          const Divider(height: 1),
           // 内容
           Expanded(
             child: SingleChildScrollView(
@@ -68,50 +51,11 @@ class ImageDetail extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 概要
-                  _section('基本信息', [
-                    _row('文件名', image.filename),
-                    _row('格式', (image.format ?? '').toUpperCase()),
-                    if (image.fileSize != null)
-                      _row('大小', _formatBytes(image.fileSize!)),
-                    if (stat != null)
-                      _row('修改时间',
-                          '${stat.modified.year}-${stat.modified.month.toString().padLeft(2, '0')}-${stat.modified.day.toString().padLeft(2, '0')}'),
-                    _row('添加时间',
-                        DateTime.fromMillisecondsSinceEpoch(image.addedAt)
-                            .toString()
-                            .substring(0, 10)),
-                  ]),
+                  _fileInfoSection(image),
+                  const SizedBox(height: 16),
+                  _divider(),
                   const SizedBox(height: 12),
-
-                  // 路径
-                  _section('路径', [
-                    SelectableText(
-                      image.path,
-                      style: const TextStyle(
-                        color: Catppuccin.subtext0,
-                        fontSize: 11,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                  ]),
-                  const SizedBox(height: 12),
-
-                  // 尺寸（Phase 4 补全）
-                  if (image.width != null || image.height != null)
-                    _section('尺寸', [
-                      _row('宽', '${image.width ?? '?'} px'),
-                      _row('高', '${image.height ?? '?'} px'),
-                    ]),
-                  const SizedBox(height: 12),
-
-                  // 标签（Phase 4 补全）
-                  _section('标签', [
-                    const Text(
-                      '暂无标签（标签功能开发中）',
-                      style: TextStyle(color: Catppuccin.overlay0, fontSize: 12),
-                    ),
-                  ]),
+                  _tagSection(context, appState, image),
                 ],
               ),
             ),
@@ -121,44 +65,19 @@ class ImageDetail extends StatelessWidget {
     );
   }
 
-  Widget _buildEmpty() {
+  Widget _panelHeader() {
     return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       color: Catppuccin.mantle,
-      child: Column(
+      child: const Row(
         children: [
-          Container(
-            height: 44,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: Catppuccin.surface0)),
-            ),
-            child: const Row(
-              children: [
-                Text(
-                  '图片详情',
-                  style: TextStyle(
-                    color: Catppuccin.text,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.info_outline,
-                      size: 40, color: Catppuccin.overlay0),
-                  const SizedBox(height: 8),
-                  const Text(
-                    '点击图片查看详情',
-                    style: TextStyle(color: Catppuccin.subtext0, fontSize: 12),
-                  ),
-                ],
-              ),
+          Text(
+            '详情',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: Catppuccin.subtext0,
             ),
           ),
         ],
@@ -166,45 +85,76 @@ class ImageDetail extends StatelessWidget {
     );
   }
 
-  Widget _section(String title, List<Widget> children) {
+  // ── 文件信息 ──
+  Widget _fileInfoSection(ImageItem image) {
+    final file = File(image.path);
+    final exists = file.existsSync();
+    final stat = exists ? file.statSync() : null;
+    final mtime = stat != null
+        ? DateTime.fromMillisecondsSinceEpoch(stat.modified.millisecondsSinceEpoch)
+        : null;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: const TextStyle(
-            color: Catppuccin.lavender,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
+        const Text('文件信息',
+            style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Catppuccin.overlay2,
+                letterSpacing: 0.5)),
+        const SizedBox(height: 8),
+        _row('文件名', image.filename),
+        _row('格式', (image.format ?? '?').toUpperCase()),
+        _row('尺寸',
+            '${image.width ?? '?'} x ${image.height ?? '?'}'),
+        _row('文件大小', _formatSize(image.fileSize)),
+        _row('路径', image.path, mono: true),
+        if (mtime != null)
+          _row('修改时间',
+              '${mtime.year}-${mtime.month.toString().padLeft(2, '0')}-${mtime.day.toString().padLeft(2, '0')} '
+                  '${mtime.hour.toString().padLeft(2, '0')}:${mtime.minute.toString().padLeft(2, '0')}'),
+        if (!exists)
+          Container(
+            margin: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Catppuccin.red.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.warning_amber_rounded, size: 12, color: Catppuccin.red),
+                SizedBox(width: 4),
+                Text('文件已丢失',
+                    style: TextStyle(fontSize: 11, color: Catppuccin.red)),
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 6),
-        ...children,
       ],
     );
   }
 
-  Widget _row(String label, String value) {
+  Widget _row(String label, String value, {bool mono = false}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 3),
+      padding: const EdgeInsets.only(bottom: 4),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
             width: 64,
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Catppuccin.overlay1,
-                fontSize: 12,
-              ),
-            ),
+            child: Text(label,
+                style: const TextStyle(
+                    fontSize: 11, color: Catppuccin.overlay1)),
           ),
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(
+              style: TextStyle(
+                fontSize: 11,
                 color: Catppuccin.text,
-                fontSize: 12,
+                fontFamily: mono ? 'monospace' : null,
               ),
             ),
           ),
@@ -213,9 +163,287 @@ class ImageDetail extends StatelessWidget {
     );
   }
 
-  String _formatBytes(int bytes) {
+  String _formatSize(int? bytes) {
+    if (bytes == null) return '?';
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  // ── 标签区域 ──
+  Widget _tagSection(BuildContext context, AppState appState, ImageItem image) {
+    final imageId = image.id;
+    if (imageId == null) return const SizedBox.shrink();
+
+    return _TagEditor(imageId: imageId);
+  }
+
+  Widget _divider() {
+    return const Divider(height: 1, color: Catppuccin.surface0);
+  }
+}
+
+/// 标签编辑器：显示已绑定标签 + 添加新标签
+class _TagEditor extends StatefulWidget {
+  final int imageId;
+  const _TagEditor({required this.imageId});
+
+  @override
+  State<_TagEditor> createState() => _TagEditorState();
+}
+
+class _TagEditorState extends State<_TagEditor> {
+  List<Tag>? _imageTags;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTags();
+  }
+
+  @override
+  void didUpdateWidget(_TagEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imageId != widget.imageId) {
+      _imageTags = null;
+      _loading = true;
+      _loadTags();
+    }
+  }
+
+  Future<void> _loadTags() async {
+    setState(() => _loading = true);
+    final appState = context.read<AppState>();
+    final tags = await appState.getImageTags(widget.imageId);
+    if (mounted) {
+      setState(() {
+        _imageTags = tags;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final appState = context.watch<AppState>();
+
+    if (_loading) {
+      return const Center(
+        child: SizedBox(
+          width: 16, height: 16,
+          child: CircularProgressIndicator(
+            strokeWidth: 1.5, color: Catppuccin.overlay1,
+          ),
+        ),
+      );
+    }
+
+    final bound = _imageTags ?? [];
+    final boundIds = bound.map((t) => t.id).toSet();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('标签',
+            style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Catppuccin.overlay2,
+                letterSpacing: 0.5)),
+        const SizedBox(height: 8),
+        // 已绑定标签 chips
+        if (bound.isNotEmpty)
+          Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: bound.map((tag) {
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: _tagColor(tag.color).withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6, height: 6,
+                      decoration: BoxDecoration(
+                        color: _tagColor(tag.color),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      tag.name,
+                      style: TextStyle(
+                          fontSize: 11, color: _tagColor(tag.color)),
+                    ),
+                    const SizedBox(width: 2),
+                    GestureDetector(
+                      onTap: () {
+                        appState.toggleTagOnSelected(tag);
+                        setState(() {
+                          bound.removeWhere((t) => t.id == tag.id);
+                        });
+                      },
+                      child: Icon(
+                        Icons.close,
+                        size: 12,
+                        color: _tagColor(tag.color).withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          )
+        else
+          const Text('未设置标签',
+              style: TextStyle(fontSize: 11, color: Catppuccin.overlay0)),
+        const SizedBox(height: 10),
+        // 添加标签按钮
+        InkWell(
+          onTap: () => _showAddDialog(appState, boundIds),
+          borderRadius: BorderRadius.circular(4),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            decoration: BoxDecoration(
+              border: Border.all(color: Catppuccin.surface1),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.add, size: 12, color: Catppuccin.overlay1),
+                SizedBox(width: 4),
+                Text('添加标签',
+                    style: TextStyle(fontSize: 11, color: Catppuccin.overlay1)),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showAddDialog(AppState appState, Set<int?> boundIds) {
+    final unbound = appState.allTags
+        .where((t) => !boundIds.contains(t.id))
+        .toList()
+      ..sort((a, b) {
+        final na = a.namespace.isEmpty ? 'zzz' : a.namespace;
+        final nb = b.namespace.isEmpty ? 'zzz' : b.namespace;
+        final cmp = na.compareTo(nb);
+        return cmp != 0 ? cmp : a.name.compareTo(b.name);
+      });
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        final searchCtrl = TextEditingController();
+        return StatefulBuilder(builder: (ctx, setLocal) {
+          return AlertDialog(
+            backgroundColor: Catppuccin.mantle,
+            title: const Text('添加标签', style: TextStyle(color: Catppuccin.text)),
+            content: SizedBox(
+              width: 280,
+              height: 350,
+              child: Column(
+                children: [
+                  TextField(
+                    controller: searchCtrl,
+                    autofocus: true,
+                    onChanged: (_) => setLocal(() {}),
+                    decoration: const InputDecoration(
+                      hintText: '搜索或输入新标签名...',
+                      isDense: true,
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView(
+                      children: unbound
+                          .where((t) =>
+                              searchCtrl.text.isEmpty ||
+                              t.name
+                                  .toLowerCase()
+                                  .contains(searchCtrl.text.toLowerCase()))
+                          .map((tag) => ListTile(
+                                dense: true,
+                                visualDensity: VisualDensity.compact,
+                                leading: Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: _tagColor(tag.color),
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                title: Text(tag.name,
+                                    style: const TextStyle(fontSize: 12)),
+                                subtitle: tag.namespace.isNotEmpty
+                                    ? Text(tag.namespace,
+                                        style: const TextStyle(fontSize: 10))
+                                    : null,
+                                onTap: () {
+                                  appState.toggleTagOnSelected(tag);
+                                  Navigator.pop(ctx);
+                                  _loadTags();
+                                },
+                              ))
+                          .toList(),
+                    ),
+                  ),
+                  // 如果搜索匹配为空，提供快速创建
+                  if (searchCtrl.text.isNotEmpty &&
+                      unbound
+                          .where((t) => t.name
+                              .toLowerCase()
+                              .contains(searchCtrl.text.toLowerCase()))
+                          .isEmpty)
+                    ListTile(
+                      dense: true,
+                      leading:
+                          const Icon(Icons.add, size: 16, color: Catppuccin.mauve),
+                      title: Text(
+                        '创建 "${searchCtrl.text}"',
+                        style: const TextStyle(
+                            fontSize: 12, color: Catppuccin.mauve),
+                      ),
+                      onTap: () async {
+                        final tag = await appState.createTag(
+                            searchCtrl.text.trim());
+                        appState.toggleTagOnSelected(tag);
+                        if (mounted) Navigator.pop(ctx);
+                        _loadTags();
+                      },
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('关闭',
+                    style: TextStyle(color: Catppuccin.overlay1)),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
+  Color _tagColor(String hex) {
+    try {
+      final h = hex.replaceFirst('#', '');
+      return Color(int.parse(h, radix: 16) | 0xFF000000);
+    } catch (_) {
+      return Catppuccin.mauve;
+    }
   }
 }
