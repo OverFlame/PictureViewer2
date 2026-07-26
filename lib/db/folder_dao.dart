@@ -96,6 +96,27 @@ class FolderDao {
         whereArgs: [folderId, path]);
   }
 
+  /// 根据路径查找文件夹
+  Future<VirtualFolder?> getByPath(String path) async {
+    final rows = await _db.rawQuery('''
+      SELECT f.* FROM folders f
+      INNER JOIN folder_paths fp ON f.id = fp.folder_id
+      WHERE fp.path = ?
+    ''', [path]);
+    if (rows.isEmpty) return null;
+    return VirtualFolder.fromMap(rows.first);
+  }
+
+  /// 创建文件夹并关联路径
+  Future<VirtualFolder> insert({
+    required String name,
+    required String path,
+  }) async {
+    final folder = await create(name);
+    await addPath(folder.id!, path);
+    return folder;
+  }
+
   /// 获取某文件夹的所有路径
   Future<List<FolderPath>> getPaths(int folderId) async {
     final rows = await _db.query('folder_paths',

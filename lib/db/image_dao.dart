@@ -216,6 +216,57 @@ class ImageDao {
     return (count ?? 0) > 0;
   }
 
+  /// 给定一批路径，返回已在数据库中的路径集合（用于导入去重）
+  Future<Set<String>> existingPaths(List<String> paths) async {
+    if (paths.isEmpty) return {};
+    // 分批查询避免 SQL 过长
+    const batchSize = 500;
+    final existing = <String>{};
+    for (int i = 0; i < paths.length; i += batchSize) {
+      final batch = paths.sublist(i,
+          i + batchSize > paths.length ? paths.length : i + batchSize);
+      final placeholders = batch.map((_) => '?').join(',');
+      final rows = await _db.rawQuery(
+        'SELECT path FROM images WHERE path IN ($placeholders)',
+        batch,
+      );
+      for (final row in rows) {
+        existing.add(row['path'] as String);
+      }
+    }
+    return existing;
+  }
+
+  /// 获取某目录下已索引的路径列表
+  Future<List<String>> pathsInDirectory(String dirPath) async {
+    final normalized = dirPath.endsWith('/') || dirPath.endsWith('\\')
+        ? dirPath
+        : '$dirPath${dirPath.contains('\\') ? '\\' : '/'}';
+    final rows = await _db.rawQuery(
+      'SELECT path FROM images WHERE path LIKE ?',
+      ['$normalized%'],
+    );
+    return rows.map((r) => r['path'] as String).toList();
+  }
+
+  /// 根据路径批量删除
+  Future<int> deleteByPaths(List<String> paths) async {
+    if (paths.isEmpty) return 0;
+    const batchSize = 500;
+    int deleted = 0;
+    for (int i = 0; i < paths.length; i += batchSize) {
+      final batch = paths.sublist(i,
+          i + batchSize > paths.length ? paths.length : i + batchSize);
+      final placeholders = batch.map((_) => '?').join(',');
+      deleted += await _db.delete(
+        'images',
+        where: 'path IN ($placeholders)',
+        whereArgs: batch,
+      );
+    }
+    return deleted;
+  }
+
   // ═══ 死索引清理 ═══
 
   /// 删除所有 path 不在给定列表中的记录
