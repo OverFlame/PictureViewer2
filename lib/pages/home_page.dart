@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
 import '../widgets/folder_panel.dart';
 import '../widgets/tag_panel.dart';
@@ -120,14 +122,11 @@ class _HomePageState extends State<HomePage> {
   Widget _buildCenter() {
     return Container(
       color: Catppuccin.base,
-      child: const Column(
-        children: [
-          // 顶部工具栏（占位）
+      child: Column(
+        children: const [
           _TopToolbar(),
           Divider(height: 1),
-          // 图片网格
           Expanded(child: ImageGrid()),
-          // 底部状态栏（占位）
           _BottomStatusBar(),
         ],
       ),
@@ -155,23 +154,27 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-/// 顶部工具栏（占位）
+/// 顶部工具栏
 class _TopToolbar extends StatelessWidget {
   const _TopToolbar();
 
   @override
   Widget build(BuildContext context) {
+    final appState = context.watch<AppState>();
+    final ctrl = TextEditingController(text: appState.searchQuery);
+
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       color: Catppuccin.mantle,
       child: Row(
         children: [
-          // 搜索/筛选栏
           Expanded(
             child: TextField(
+              controller: ctrl,
+              onChanged: (v) => appState.setSearchQuery(v),
               decoration: const InputDecoration(
-                hintText: '搜索或输入筛选表达式...',
+                hintText: '搜索文件名...',
                 prefixIcon: Icon(Icons.search, size: 18),
                 isDense: true,
                 contentPadding:
@@ -181,13 +184,16 @@ class _TopToolbar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          // 高级筛选按钮
           IconButton(
             icon: const Icon(Icons.filter_list, size: 18),
             tooltip: '高级筛选',
             onPressed: () {},
           ),
-          // 设置按钮
+          IconButton(
+            icon: const Icon(Icons.refresh, size: 18),
+            tooltip: '刷新',
+            onPressed: () => appState.refresh(),
+          ),
           IconButton(
             icon: const Icon(Icons.settings_outlined, size: 18),
             tooltip: '设置',
@@ -199,33 +205,47 @@ class _TopToolbar extends StatelessWidget {
   }
 }
 
-/// 底部状态栏（占位）
+/// 底部状态栏
 class _BottomStatusBar extends StatelessWidget {
   const _BottomStatusBar();
 
   @override
   Widget build(BuildContext context) {
+    final appState = context.watch<AppState>();
+
+    String leftText;
+    if (appState.importing) {
+      leftText = '导入中 ${(appState.importProgress * 100).toStringAsFixed(0)}%';
+    } else {
+      leftText = '${appState.totalCount} 张图片'
+          '${appState.images.length < appState.totalCount ? " (已加载 ${appState.images.length})" : ""}';
+    }
+
     return Container(
       height: 28,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       color: Catppuccin.mantle,
-      child: const Row(
+      child: Row(
         children: [
           Text(
-            '0 张图片',
-            style: TextStyle(
-              color: Catppuccin.overlay1,
-              fontSize: 11,
-            ),
+            leftText,
+            style: const TextStyle(color: Catppuccin.overlay1, fontSize: 11),
           ),
-          Spacer(),
-          Text(
-            '就绪',
-            style: TextStyle(
-              color: Catppuccin.overlay0,
-              fontSize: 11,
+          const Spacer(),
+          if (appState.importing)
+            const SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                color: Catppuccin.mauve,
+              ),
+            )
+          else
+            const Text(
+              '就绪',
+              style: TextStyle(color: Catppuccin.overlay0, fontSize: 11),
             ),
-          ),
         ],
       ),
     );

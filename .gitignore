@@ -42,3 +42,6 @@ Thumbs.db
 DEVGUIDE.md
 PROJECT_LOG.md
 history.md
+
+# Temp build debug files
+build_err*.txt

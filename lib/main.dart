@@ -1,10 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'theme/catppuccin.dart';
 import 'pages/home_page.dart';
+import 'db/database.dart';
+import 'services/thumbnail_cache.dart';
+import 'state/app_state.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 初始化数据库
+  await DatabaseManager.instance.init();
+  // 初始化缩略图服务（创建缓存目录）
+  await ThumbnailService.instance.init();
 
   // 锁定竖屏（桌面端无影响）
   SystemChrome.setPreferredOrientations([
@@ -31,13 +40,18 @@ class PictureViewerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'PictureViewer',
-      debugShowCheckedModeBanner: false,
-      theme: Catppuccin.themeData,
-      darkTheme: Catppuccin.themeData,
-      themeMode: ThemeMode.dark,
-      home: const HomePage(),
+    return ChangeNotifierProvider(
+      create: (_) => AppState(),
+      child: MaterialApp(
+        title: 'PictureViewer',
+        debugShowCheckedModeBanner: false,
+        theme: Catppuccin.themeData,
+        darkTheme: Catppuccin.themeData,
+        themeMode: ThemeMode.dark,
+        home: const HomePage(),
+      ),
     );
   }
 }
+
+
