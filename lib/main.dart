@@ -2,9 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'theme/catppuccin.dart';
 import 'pages/home_page.dart';
+import 'db/database.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 初始化数据库
+  await DatabaseManager.instance.init();
 
   // 锁定竖屏（桌面端无影响）
   SystemChrome.setPreferredOrientations([
