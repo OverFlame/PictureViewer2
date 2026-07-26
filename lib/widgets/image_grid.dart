@@ -69,8 +69,8 @@ class _ImageGridState extends State<ImageGrid> {
       child: GridView.builder(
         controller: _scrollCtrl,
         padding: const EdgeInsets.all(8),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 5,
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: appState.gridColumns,
           mainAxisSpacing: 6,
           crossAxisSpacing: 6,
           childAspectRatio: 1,

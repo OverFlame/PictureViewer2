@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../services/exif_service.dart';
 import '../theme/catppuccin.dart';
 import '../utils/log_util.dart';
+import 'export_actions.dart';
 
 /// 右侧详情面板：选中图片信息 + 标签编辑
 class ImageDetail extends StatefulWidget {
@@ -181,13 +182,16 @@ class _ImageDetailState extends State<ImageDetail> {
   }
 
   Widget _panelHeader() {
+    final appState = context.read<AppState>();
+    final image = appState.selectedImage;
+
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       color: Catppuccin.mantle,
-      child: const Row(
+      child: Row(
         children: [
-          Text(
+          const Text(
             '详情',
             style: TextStyle(
               fontSize: 13,
@@ -195,6 +199,8 @@ class _ImageDetailState extends State<ImageDetail> {
               color: Catppuccin.subtext0,
             ),
           ),
+          const Spacer(),
+          ExportActions(image: image),
         ],
       ),
     );
