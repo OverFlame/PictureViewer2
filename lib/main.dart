@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'theme/catppuccin.dart';
 import 'pages/home_page.dart';
 import 'db/database.dart';
+import 'services/settings_service.dart';
 import 'services/thumbnail_cache.dart';
 import 'state/app_state.dart';
 import 'utils/log_util.dart';
@@ -14,6 +15,8 @@ Future<void> main() async {
 
   // 初始化数据库
   await DatabaseManager.instance.init();
+  // 初始化设置服务
+  await SettingsService.instance.init();
   // 初始化缩略图服务（创建缓存目录）
   logInfo('Main', 'Initializing ThumbnailService');
   await ThumbnailService.instance.init();
@@ -24,16 +27,6 @@ Future<void> main() async {
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
   ]);
-
-  // 设置系统 UI 为暗色
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: Catppuccin.mantle,
-      systemNavigationBarIconBrightness: Brightness.light,
-    ),
-  );
 
   logInfo('Main', 'Launching app');
   runApp(const PictureViewerApp());
@@ -46,13 +39,35 @@ class PictureViewerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
       create: (_) => AppState(),
-      child: MaterialApp(
-        title: 'PictureViewer',
-        debugShowCheckedModeBanner: false,
-        theme: Catppuccin.themeData,
-        darkTheme: Catppuccin.themeData,
-        themeMode: ThemeMode.dark,
-        home: const HomePage(),
+      child: Consumer<AppState>(
+        builder: (context, state, _) {
+          // 根据主题动态设置系统 UI 样式
+          final isDark = state.themeMode == ThemeMode.dark ||
+              (state.themeMode == ThemeMode.system &&
+                  MediaQuery.of(context).platformBrightness ==
+                      Brightness.dark);
+
+          SystemChrome.setSystemUIOverlayStyle(
+            SystemUiOverlayStyle(
+              statusBarColor: Colors.transparent,
+              statusBarIconBrightness:
+                  isDark ? Brightness.light : Brightness.dark,
+              systemNavigationBarColor:
+                  isDark ? Catppuccin.mantle : const Color(0xFFE6E9EF),
+              systemNavigationBarIconBrightness:
+                  isDark ? Brightness.light : Brightness.dark,
+            ),
+          );
+
+          return MaterialApp(
+            title: 'PictureViewer',
+            debugShowCheckedModeBanner: false,
+            theme: Catppuccin.lightThemeData,
+            darkTheme: Catppuccin.darkThemeData,
+            themeMode: state.themeMode,
+            home: const HomePage(),
+          );
+        },
       ),
     );
   }

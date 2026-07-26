@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:io' as io;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 import '../db/database.dart';
 import '../db/image_dao.dart';
 import '../db/tag_dao.dart';
 import '../db/folder_dao.dart';
 import '../services/import_service.dart';
+import '../services/settings_service.dart';
 import '../services/thumbnail_cache.dart';
 import '../utils/log_util.dart';
 
@@ -71,6 +73,14 @@ class AppState extends ChangeNotifier {
   List<VirtualFolder> _folders = [];
   List<VirtualFolder> get folders => _folders;
 
+  // ── 设置 ──
+  ThemeMode _themeMode = ThemeMode.dark;
+  ThemeMode get themeMode => _themeMode;
+  int _gridColumns = 5;
+  int get gridColumns => _gridColumns;
+  int _cacheSizeMB = 2048;
+  int get cacheSizeMB => _cacheSizeMB;
+
   // ── 全屏查看器 ──
   List<ImageItem> _viewerImages = [];
   List<ImageItem> get viewerImages => _viewerImages;
@@ -126,7 +136,8 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _init() async {
-    logInfo('AppState', 'Initializing (loadTags + loadFolders + refresh)');
+    logInfo('AppState', 'Initializing (settings + tags + folders + refresh)');
+    await loadSettings();
     await loadTags();
     await loadFolders();
     await refresh();
@@ -318,6 +329,79 @@ class AppState extends ChangeNotifier {
     logInfo('AppState', 'Clearing all tag filters');
     _tagFilter = const TagFilter();
     refresh();
+  }
+
+  // ═══════════════ 文件夹 ═══════════════
+
+  // ═══════════════ 设置操作 ═══════════════
+
+  /// 从 SharedPreferences 加载已保存的设置（初始化时调用）
+  Future<void> loadSettings() async {
+    final ss = SettingsService.instance;
+    _themeMode = ss.themeMode;
+    _gridColumns = ss.gridColumns;
+    _cacheSizeMB = ss.cacheSizeMB;
+    logInfo('AppState',
+        'Settings loaded: theme=${_themeMode.name}, grid=$_gridColumns, cache=${_cacheSizeMB}MB');
+    notifyListeners();
+  }
+
+  Future<void> setThemeMode(ThemeMode mode) async {
+    _themeMode = mode;
+    await SettingsService.instance.setThemeMode(mode);
+    logInfo('AppState', 'Theme set to ${mode.name}');
+    notifyListeners();
+  }
+
+  Future<void> setGridColumns(int cols) async {
+    _gridColumns = cols.clamp(2, 10);
+    await SettingsService.instance.setGridColumns(_gridColumns);
+    notifyListeners();
+  }
+
+  Future<void> setCacheSizeMB(int mb) async {
+    _cacheSizeMB = mb.clamp(256, 8192);
+    await SettingsService.instance.setCacheSizeMB(_cacheSizeMB);
+    notifyListeners();
+  }
+
+  // ═══════════════ 导出 / 分享 ═══════════════
+
+  /// 拷贝当前选中图片到指定目录
+  Future<String?> copySelectedImageTo(String destDir) async {
+    final img = selectedImage;
+    if (img == null) return null;
+    final src = io.File(img.path);
+    if (!await src.exists()) return null;
+
+    final name = img.filename;
+    final destPath = '$destDir${io.Platform.pathSeparator}$name';
+    final dest = io.File(destPath);
+
+    // 如果存在同名文件，自动加序号
+    int counter = 1;
+    String finalPath = destPath;
+    while (await dest.exists()) {
+      final dot = name.lastIndexOf('.');
+      final base = dot > 0 ? name.substring(0, dot) : name;
+      final ext = dot > 0 ? name.substring(dot) : '';
+      finalPath = '$destDir${io.Platform.pathSeparator}${base}_($counter)$ext';
+      counter++;
+    }
+
+    await src.copy(finalPath);
+    logInfo('AppState', 'Copied to $finalPath');
+    return finalPath;
+  }
+
+  /// 拷贝当前选中图片到系统剪贴板（Windows）
+  Future<void> copyImageToClipboard() async {
+    final img = selectedImage;
+    if (img == null) return;
+    final file = io.File(img.path);
+    if (!await file.exists()) return;
+    // 通过文件路径传递，具体剪贴板操作在 widget 层用 platform channel 实现
+    logInfo('AppState', 'Copy image to clipboard requested: ${img.path}');
   }
 
   // ═══════════════ 文件夹 ═══════════════

@@ -9,6 +9,7 @@ import '../widgets/image_grid.dart';
 import '../widgets/image_detail.dart';
 import '../widgets/image_viewer.dart';
 import '../utils/log_util.dart';
+import 'settings_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -277,7 +278,7 @@ class _TopToolbar extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.settings_outlined, size: 18),
             tooltip: '设置',
-            onPressed: () {},
+            onPressed: () => SettingsDialog.show(context),
           ),
         ],
       ),

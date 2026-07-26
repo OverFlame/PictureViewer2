@@ -53,116 +53,143 @@ class Catppuccin {
   static Color namespaceColor(String namespace) =>
       namespaceColors[namespace] ?? mauve;
 
-  /// 完整 Material 3 暗色主题
-  static ThemeData get themeData => ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        colorSchemeSeed: mauve,
-        scaffoldBackgroundColor: base,
+  /// Catppuccin Latte (浅色) 色板
+  static ThemeData get lightThemeData => _buildTheme(Brightness.light);
+  /// Catppuccin Mocha (暗色) 色板
+  static ThemeData get darkThemeData => _buildTheme(Brightness.dark);
 
-        // ── AppBar ──
-        appBarTheme: const AppBarTheme(
-          backgroundColor: mantle,
-          foregroundColor: text,
-          elevation: 0,
-          centerTitle: false,
+  /// 完整 Material 3 暗色主题 (兼容旧代码)
+  static ThemeData get themeData => darkThemeData;
+
+  static ThemeData _buildTheme(Brightness brightness) {
+    final bool isDark = brightness == Brightness.dark;
+    return ThemeData(
+      useMaterial3: true,
+      brightness: brightness,
+      colorSchemeSeed: isDark ? mauve : const Color(0xFF8839EF),
+      scaffoldBackgroundColor: isDark ? base : const Color(0xFFEFF1F5),
+
+      // ── AppBar ──
+      appBarTheme: AppBarTheme(
+        backgroundColor: isDark ? mantle : const Color(0xFFE6E9EF),
+        foregroundColor: isDark ? text : const Color(0xFF4C4F69),
+        elevation: 0,
+        centerTitle: false,
+      ),
+
+      // ── 卡片 ──
+      cardTheme: CardThemeData(
+        color: isDark ? surface0 : const Color(0xFFCCD0DA),
+        elevation: 1,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
         ),
+      ),
 
-        // ── 卡片 ──
-        cardTheme: CardThemeData(
-          color: surface0,
-          elevation: 1,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
+      // ── 分割线 ──
+      dividerTheme: DividerThemeData(
+        color: isDark ? surface1 : const Color(0xFFBCC0CC),
+        thickness: 0.5,
+        space: 0,
+      ),
+
+      // ── 输入框 ──
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: isDark ? surface0 : const Color(0xFFCCD0DA),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(
+            color: isDark ? surface1 : const Color(0xFFBCC0CC)),
         ),
-
-        // ── 分割线 ──
-        dividerTheme: const DividerThemeData(
-          color: surface1,
-          thickness: 0.5,
-          space: 0,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(
+            color: isDark ? surface1 : const Color(0xFFBCC0CC)),
         ),
-
-        // ── 输入框 ──
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: surface0,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: surface1),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: surface1),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: mauve, width: 1.5),
-          ),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          hintStyle: const TextStyle(color: overlay0),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(
+            color: isDark ? mauve : const Color(0xFF8839EF), width: 1.5),
         ),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        hintStyle: TextStyle(
+          color: isDark ? overlay0 : const Color(0xFF9CA0B0)),
+      ),
 
-        // ── 浮动按钮 ──
-        floatingActionButtonTheme: FloatingActionButtonThemeData(
-          backgroundColor: mauve,
-          foregroundColor: base,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+      // ── 浮动按钮 ──
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        backgroundColor: isDark ? mauve : const Color(0xFF8839EF),
+        foregroundColor: isDark ? base : const Color(0xFFEFF1F5),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
         ),
+      ),
 
-        // ── 文字主题 ──
-        textTheme: const TextTheme(
-          headlineLarge: TextStyle(
-            color: text, fontSize: 28, fontWeight: FontWeight.bold),
-          headlineMedium: TextStyle(
-            color: text, fontSize: 22, fontWeight: FontWeight.w600),
-          titleLarge: TextStyle(
-            color: text, fontSize: 18, fontWeight: FontWeight.w600),
-          titleMedium: TextStyle(
-            color: text, fontSize: 14, fontWeight: FontWeight.w500),
-          bodyLarge: TextStyle(color: text, fontSize: 14),
-          bodyMedium: TextStyle(color: subtext0, fontSize: 13),
-          bodySmall: TextStyle(color: subtext1, fontSize: 12),
-          labelLarge: TextStyle(
-            color: text, fontSize: 14, fontWeight: FontWeight.w500),
-          labelMedium: TextStyle(color: overlay1, fontSize: 12),
-          labelSmall: TextStyle(color: overlay0, fontSize: 10),
+      // ── 文字主题 ──
+      textTheme: TextTheme(
+        headlineLarge: TextStyle(
+          color: isDark ? text : const Color(0xFF4C4F69),
+          fontSize: 28, fontWeight: FontWeight.bold),
+        headlineMedium: TextStyle(
+          color: isDark ? text : const Color(0xFF4C4F69),
+          fontSize: 22, fontWeight: FontWeight.w600),
+        titleLarge: TextStyle(
+          color: isDark ? text : const Color(0xFF4C4F69),
+          fontSize: 18, fontWeight: FontWeight.w600),
+        titleMedium: TextStyle(
+          color: isDark ? text : const Color(0xFF4C4F69),
+          fontSize: 14, fontWeight: FontWeight.w500),
+        bodyLarge: TextStyle(
+          color: isDark ? text : const Color(0xFF4C4F69), fontSize: 14),
+        bodyMedium: TextStyle(
+          color: isDark ? subtext0 : const Color(0xFF6C6F85), fontSize: 13),
+        bodySmall: TextStyle(
+          color: isDark ? subtext1 : const Color(0xFF5C5F77), fontSize: 12),
+        labelLarge: TextStyle(
+          color: isDark ? text : const Color(0xFF4C4F69),
+          fontSize: 14, fontWeight: FontWeight.w500),
+        labelMedium: TextStyle(
+          color: isDark ? overlay1 : const Color(0xFF8C8FA1), fontSize: 12),
+        labelSmall: TextStyle(
+          color: isDark ? overlay0 : const Color(0xFF9CA0B0), fontSize: 10),
+      ),
+
+      // ── 图标主题 ──
+      iconTheme: IconThemeData(
+        color: isDark ? overlay1 : const Color(0xFF8C8FA1), size: 20),
+
+      // ── 对话框 ──
+      dialogTheme: DialogThemeData(
+        backgroundColor: isDark ? surface0 : const Color(0xFFCCD0DA),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
         ),
+      ),
 
-        // ── 图标主题 ──
-        iconTheme: const IconThemeData(color: overlay1, size: 20),
-
-        // ── 对话框 ──
-        dialogTheme: DialogThemeData(
-          backgroundColor: surface0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-
-        // ── 菜单 ──
-        menuTheme: MenuThemeData(
-          style: MenuStyle(
-            backgroundColor: WidgetStateProperty.all(surface0),
-            shape: WidgetStateProperty.all(
-              RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
+      // ── 菜单 ──
+      menuTheme: MenuThemeData(
+        style: MenuStyle(
+          backgroundColor: WidgetStateProperty.all(
+            isDark ? surface0 : const Color(0xFFCCD0DA)),
+          shape: WidgetStateProperty.all(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
             ),
           ),
         ),
+      ),
 
-        // ── Tooltip ──
-        tooltipTheme: TooltipThemeData(
-          decoration: BoxDecoration(
-            color: surface1,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          textStyle: const TextStyle(color: text, fontSize: 12),
+      // ── Tooltip ──
+      tooltipTheme: TooltipThemeData(
+        decoration: BoxDecoration(
+          color: isDark ? surface1 : const Color(0xFFBCC0CC),
+          borderRadius: BorderRadius.circular(6),
         ),
-      );
+        textStyle: TextStyle(
+          color: isDark ? text : const Color(0xFF4C4F69), fontSize: 12),
+      ),
+    );
+  }
 }

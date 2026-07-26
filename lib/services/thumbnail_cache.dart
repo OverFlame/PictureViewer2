@@ -51,6 +51,9 @@ class ThumbnailService {
     return _instance!;
   }
 
+  /// 缓存根目录路径
+  String get cacheDir => _cacheDir;
+
   Future<void> init() async {
     final appDir = await getApplicationDocumentsDirectory();
     _cacheDir = p.join(appDir.path, 'PictureViewer', 'thumbnails');

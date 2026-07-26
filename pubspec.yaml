@@ -44,6 +44,7 @@ dependencies:
   file_picker: ^11.0.2
   desktop_drop: ^0.4.4
   exif: ^3.3.0
+  shared_preferences: ^2.5.0
 
 dev_dependencies:
   flutter_test:
