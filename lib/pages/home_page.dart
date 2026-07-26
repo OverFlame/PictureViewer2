@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
 import '../widgets/folder_panel.dart';
 import '../widgets/tag_panel.dart';
 import '../widgets/image_grid.dart';
 import '../widgets/image_detail.dart';
+import '../widgets/image_viewer.dart';
+import '../utils/log_util.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -22,38 +25,115 @@ class _HomePageState extends State<HomePage> {
   // 左侧面板当前 tab: 0=文件夹, 1=标签
   int _leftTabIndex = 0;
 
+  // 拖拽状态
+  bool _dragging = false;
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Row(
+    final appState = context.watch<AppState>();
+
+    return DropTarget(
+      onDragDone: (detail) {
+        setState(() => _dragging = false);
+        _handleDrop(detail.files.map((f) => f.path).toList(), appState);
+      },
+      onDragEntered: (_) => setState(() => _dragging = true),
+      onDragExited: (_) => setState(() => _dragging = false),
+      child: Stack(
         children: [
-          // ═══ 左面板 ═══
-          if (_leftPanelOpen)
-            SizedBox(
-              width: 280,
-              child: _buildLeftPanel(),
+          Scaffold(
+            body: Row(
+              children: [
+                // ═══ 左面板 ═══
+                if (_leftPanelOpen)
+                  SizedBox(
+                    width: 280,
+                    child: _buildLeftPanel(),
+                  ),
+
+                // 分隔条
+                _buildResizeHandle(() {
+                  setState(() => _leftPanelOpen = !_leftPanelOpen);
+                }),
+
+                // ═══ 中央主区域 ═══
+                Expanded(child: _buildCenter()),
+
+                // 分隔条
+                _buildResizeHandle(() {
+                  setState(() => _rightPanelOpen = !_rightPanelOpen);
+                }),
+
+                // ═══ 右面板 ═══
+                if (_rightPanelOpen)
+                  SizedBox(
+                    width: 320,
+                    child: const ImageDetail(),
+                  ),
+              ],
             ),
-
-          // 分隔条
-          _buildResizeHandle(() {
-            setState(() => _leftPanelOpen = !_leftPanelOpen);
-          }),
-
-          // ═══ 中央主区域 ═══
-          Expanded(child: _buildCenter()),
-
-          // 分隔条
-          _buildResizeHandle(() {
-            setState(() => _rightPanelOpen = !_rightPanelOpen);
-          }),
-
-          // ═══ 右面板 ═══
-          if (_rightPanelOpen)
-            SizedBox(
-              width: 320,
-              child: const ImageDetail(),
-            ),
+          ),
+          // 拖拽提示覆盖层
+          if (_dragging) _buildDropOverlay(),
+          // 全屏图片查看器
+          if (appState.showViewer) ImageViewer(state: appState),
         ],
+      ),
+    );
+  }
+
+  void _handleDrop(List<String> paths, AppState appState) {
+    if (paths.isEmpty) return;
+    logInfo('Home', 'Drop: ${paths.length} path(s)');
+    appState.importPaths(paths);
+  }
+
+  Widget _buildDropOverlay() {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: Container(
+          color: Catppuccin.mauve.withValues(alpha: 0.15),
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 32),
+              decoration: BoxDecoration(
+                color: Catppuccin.mantle.withValues(alpha: 0.95),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: Catppuccin.mauve,
+                  width: 2,
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.cloud_upload_outlined,
+                    size: 56,
+                    color: Catppuccin.mauve,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    '拖放文件夹或图片到此处',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: Catppuccin.text,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '支持文件夹、单张或多张图片',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Catppuccin.subtext0,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

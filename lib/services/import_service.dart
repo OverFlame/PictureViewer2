@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import '../db/database.dart';
 import '../db/image_dao.dart';
 import '../db/folder_dao.dart';
+import '../utils/log_util.dart';
 import 'file_scanner.dart';
 import 'thumbnail_cache.dart';
 
@@ -53,6 +54,101 @@ class ImportService {
     );
   }
 
+  /// 扫描并导入混合路径（目录 + 单文件）
+  Stream<ImportProgress> importPaths(List<String> paths) async* {
+    if (_isImporting) return;
+    _isImporting = true;
+
+    try {
+      // 1. 扫描所有路径：目录递归扫描，文件直接检查
+      final allPaths = <String>{};
+      final folderNames = <String>[];
+
+      for (final path in paths) {
+        final stat = FileSystemEntity.typeSync(path);
+        if (stat == FileSystemEntityType.directory) {
+          final scanned = await FileScanner.scanDirectory(path);
+          allPaths.addAll(scanned);
+          folderNames.add(p.basename(path));
+        } else if (stat == FileSystemEntityType.file && isImageFile(path)) {
+          allPaths.add(path);
+        }
+      }
+
+      if (allPaths.isEmpty) {
+        logInfo('Import', 'importPaths: no image files found');
+        _isImporting = false;
+        return;
+      }
+
+      final imagePaths = allPaths.toList();
+      final existing = await _imageDao.existingPaths(imagePaths);
+      final newPaths = imagePaths.where((p) => !existing.contains(p)).toList();
+      final total = newPaths.length;
+      logInfo('Import', 'importPaths: scanned ${imagePaths.length} total, $total new, ${imagePaths.length - total} dupes');
+
+      if (total == 0) {
+        logInfo('Import', 'importPaths: all files already indexed');
+        _isImporting = false;
+        return;
+      }
+
+      // 2. 逐条写入数据库
+      final imageIds = <({int id, String path})>[];
+      for (int i = 0; i < newPaths.length; i++) {
+        final fp = newPaths[i];
+        final file = File(fp);
+
+        int sizeBytes = 0;
+        try { sizeBytes = await file.length(); } catch (_) {}
+
+        final ext = p.extension(fp).toLowerCase();
+        final filename = p.basename(fp);
+        final now = DateTime.now().millisecondsSinceEpoch;
+
+        final item = ImageItem(
+          path: fp,
+          filename: filename,
+          format: ext.isNotEmpty ? ext.substring(1) : 'unknown',
+          fileSize: sizeBytes > 0 ? sizeBytes : null,
+          addedAt: now,
+        );
+
+        final fid = await _imageDao.insert(item);
+        imageIds.add((id: fid, path: fp));
+
+        yield ImportProgress(
+          current: i + 1,
+          total: total,
+          currentFile: fp,
+          imageId: fid,
+        );
+      }
+
+      // 3. 创建文件夹记录
+      final folderDirs = FileScanner.collectFolders(newPaths);
+      logInfo('Import', 'importPaths: creating ${folderDirs.length} folder record(s)');
+      for (final d in folderDirs) {
+        final folderName = p.basename(d);
+        final found = await _folderDao.getByPath(d);
+        if (found == null) {
+          await _folderDao.insert(name: folderName, path: d);
+        }
+      }
+
+      // 4. 如果只拖入了单文件（无文件夹记录），创建手动导入记录
+      if (folderDirs.isEmpty) {
+        final now = DateTime.now();
+        final importName = '手动导入 '
+            '${now.month.toString().padLeft(2, '0')}/${now.day.toString().padLeft(2, '0')} '
+            '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+        await _folderDao.insert(name: importName, path: '');
+      }
+    } finally {
+      _isImporting = false;
+    }
+  }
+
   /// 扫描并导入目录中的所有图片
   Stream<ImportProgress> importDirectory(String dirPath) async* {
     if (_isImporting) return;
@@ -61,6 +157,8 @@ class ImportService {
     try {
       // 1. 扫描文件系统
       final imagePaths = await FileScanner.scanDirectory(dirPath);
+      logInfo('Import',
+          'importDirectory: ${imagePaths.length} images in "$dirPath"');
       if (imagePaths.isEmpty) {
         _isImporting = false;
         return;

@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import '../utils/log_util.dart';
 
 /// 图片数据类
 class ImageItem {
@@ -148,6 +149,8 @@ class ImageDao {
       }
     });
 
+    logInfo('ImageDao',
+        'insertBatch: ${images.length} input → $inserted new, $skipped skipped');
     return (inserted: inserted, skipped: skipped);
   }
 
@@ -327,6 +330,7 @@ class ImageDao {
     if (alivePaths.isEmpty) {
       // 没有存活路径 → 清空全部图片
       final count = await _db.delete('images');
+      logInfo('ImageDao', 'purgeDead: cleared all ($count entries)');
       return count;
     }
 
@@ -354,6 +358,7 @@ class ImageDao {
           where: 'id IN ($placeholders)', whereArgs: batch);
     }
 
+    logInfo('ImageDao', 'purgeDead: removed $totalDeleted dead entries');
     return totalDeleted;
   }
 }

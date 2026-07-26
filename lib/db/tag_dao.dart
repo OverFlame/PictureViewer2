@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import '../utils/log_util.dart';
 
 /// 标签数据类
 class Tag {
@@ -61,13 +62,18 @@ class TagDao {
   Future<Tag> insert(Tag tag) async {
     final id = await _db.insert('tags', tag.toMap(),
         conflictAlgorithm: ConflictAlgorithm.ignore);
-    if (id > 0) return Tag(id: id, namespace: tag.namespace, name: tag.name);
+    if (id > 0) {
+      logInfo('TagDao', 'Inserted tag: id=$id name="${tag.name}"');
+      return Tag(id: id, namespace: tag.namespace, name: tag.name);
+    }
 
     // 冲突时查询已有 id
     final rows = await _db.query('tags',
         where: 'namespace = ? AND name = ?',
         whereArgs: [tag.namespace, tag.name]);
-    return Tag.fromMap(rows.first);
+    final existing = Tag.fromMap(rows.first);
+    logInfo('TagDao', 'Tag already exists: id=${existing.id} name="${existing.name}"');
+    return existing;
   }
 
   Future<Tag?> getById(int id) async {
@@ -91,7 +97,9 @@ class TagDao {
   }
 
   Future<int> delete(int id) async {
-    return _db.delete('tags', where: 'id = ?', whereArgs: [id]);
+    final count = await _db.delete('tags', where: 'id = ?', whereArgs: [id]);
+    logInfo('TagDao', 'Deleted tag id=$id (affected $count row(s))');
+    return count;
   }
 
   /// 获取所有标签（简单列表，不带计数）
@@ -268,9 +276,11 @@ class TagDao {
 
   /// 删除无图片引用的孤立标签
   Future<int> deleteOrphanTags() async {
-    return _db.delete('tags',
+    final count = await _db.delete('tags',
         where: '''
       id NOT IN (SELECT DISTINCT tag_id FROM image_tags)
     ''');
+    logInfo('TagDao', 'deleteOrphanTags: removed $count orphan(s)');
+    return count;
   }
 }

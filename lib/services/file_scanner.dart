@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import '../utils/log_util.dart';
+
 /// 支持的图片格式
 const _imageExtensions = {
   '.jpg', '.jpeg', '.png', '.gif', '.bmp',
@@ -30,13 +32,17 @@ class FileScanner {
   static Future<List<String>> scanDirectory(String dirPath) async {
     final result = <String>[];
     final dir = Directory(dirPath);
-    if (!dir.existsSync()) return result;
+    if (!dir.existsSync()) {
+      logWarn('Scanner', 'Directory not found: $dirPath');
+      return result;
+    }
 
     await for (final entity in dir.list(recursive: true)) {
       if (entity is File && isImageFile(entity.path)) {
         result.add(entity.path);
       }
     }
+    logInfo('Scanner', 'scanDirectory "$dirPath" → ${result.length} images');
     return result;
   }
 
@@ -50,6 +56,8 @@ class FileScanner {
     final added = fsPaths.difference(knownPaths).toList()..sort();
     final removed = knownPaths.difference(fsPaths).toList()..sort();
 
+    logInfo('Scanner',
+        'rescan: ${fsPaths.length} files, +${added.length} new, -${removed.length} removed');
     return ScanResult(
       added: added,
       removed: removed,

@@ -15,6 +15,16 @@ class FolderPanel extends StatefulWidget {
 }
 
 class _FolderPanelState extends State<FolderPanel> {
+  final _pathController = TextEditingController();
+  final _pathFocus = FocusNode();
+
+  @override
+  void dispose() {
+    _pathController.dispose();
+    _pathFocus.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final appState = context.watch<AppState>();
@@ -22,26 +32,10 @@ class _FolderPanelState extends State<FolderPanel> {
 
     return Column(
       children: [
-        // 导入按钮
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: appState.importing ? null : () => _pickFolder(appState),
-              icon: Icon(
-                appState.importing ? Icons.hourglass_empty : Icons.create_new_folder,
-                size: 16,
-              ),
-              label: Text(appState.importing ? '导入中...' : '添加文件夹'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Catppuccin.mauve,
-                side: BorderSide(color: Catppuccin.surface1),
-                padding: const EdgeInsets.symmetric(vertical: 8),
-              ),
-            ),
-          ),
-        ),
+        // 路径输入框
+        _buildPathInput(appState),
+        // 导入按钮行
+        _buildImportButtons(appState),
         // 导入进度条
         if (appState.importing)
           Padding(
@@ -67,6 +61,129 @@ class _FolderPanelState extends State<FolderPanel> {
     );
   }
 
+  Widget _buildPathInput(AppState appState) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: SizedBox(
+              height: 32,
+              child: TextField(
+                controller: _pathController,
+                focusNode: _pathFocus,
+                enabled: !appState.importing,
+                onSubmitted: (_) => _addFromPath(appState),
+                decoration: InputDecoration(
+                  hintText: '输入文件夹或文件路径，回车添加',
+                  hintStyle: TextStyle(
+                    fontSize: 11,
+                    color: Catppuccin.overlay1,
+                  ),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(6),
+                    borderSide: BorderSide(color: Catppuccin.surface1),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(6),
+                    borderSide: BorderSide(color: Catppuccin.surface1),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(6),
+                    borderSide: BorderSide(color: Catppuccin.mauve),
+                  ),
+                  filled: true,
+                  fillColor: Catppuccin.surface0,
+                ),
+                style: TextStyle(fontSize: 12, color: Catppuccin.text),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          SizedBox(
+            height: 32,
+            child: IconButton(
+              onPressed: appState.importing ? null : () => _addFromPath(appState),
+              icon: const Icon(Icons.add, size: 18),
+              tooltip: '从路径添加',
+              style: IconButton.styleFrom(
+                foregroundColor: Catppuccin.mauve,
+                backgroundColor: Catppuccin.surface0,
+                side: BorderSide(color: Catppuccin.surface1),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImportButtons(AppState appState) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: SizedBox(
+              height: 32,
+              child: OutlinedButton.icon(
+                onPressed: appState.importing ? null : () => _pickFolder(appState),
+                icon: Icon(
+                  appState.importing ? Icons.hourglass_empty : Icons.create_new_folder,
+                  size: 14,
+                ),
+                label: Text(
+                  appState.importing ? '导入中...' : '添加文件夹',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Catppuccin.mauve,
+                  side: BorderSide(color: Catppuccin.surface1),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: SizedBox(
+              height: 32,
+              child: OutlinedButton.icon(
+                onPressed: appState.importing ? null : () => _pickFiles(appState),
+                icon: Icon(
+                  Icons.image_outlined,
+                  size: 14,
+                  color: appState.importing ? Catppuccin.overlay1 : Catppuccin.teal,
+                ),
+                label: Text(
+                  '浏览文件',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: appState.importing ? Catppuccin.overlay1 : Catppuccin.text,
+                  ),
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Catppuccin.teal,
+                  side: BorderSide(color: Catppuccin.surface1),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _emptyGuide() {
     return Center(
       child: Padding(
@@ -77,11 +194,12 @@ class _FolderPanelState extends State<FolderPanel> {
             Icon(Icons.folder_open, size: 48, color: Catppuccin.overlay0),
             const SizedBox(height: 12),
             const Text(
-              '点击「添加文件夹」导入图片',
+              '拖拽文件夹/图片到主区域 |\n点击按钮浏览 | 输入路径添加',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Catppuccin.subtext0,
                 fontSize: 12,
+                height: 1.5,
               ),
             ),
           ],
@@ -119,12 +237,40 @@ class _FolderPanelState extends State<FolderPanel> {
     );
   }
 
+  void _addFromPath(AppState appState) {
+    final text = _pathController.text.trim();
+    if (text.isEmpty) return;
+    _pathController.clear();
+    _pathFocus.unfocus();
+    appState.importPaths([text]);
+  }
+
   Future<void> _pickFolder(AppState appState) async {
     final result = await FilePicker.getDirectoryPath(
       dialogTitle: '选择包含图片的文件夹',
     );
     if (result != null && mounted) {
       await appState.importDirectory(result);
+    }
+  }
+
+  Future<void> _pickFiles(AppState appState) async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: [
+        'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'tif', 'ico',
+      ],
+      allowMultiple: true,
+      dialogTitle: '选择图片文件',
+    );
+    if (result != null && result.files.isNotEmpty && mounted) {
+      final paths = result.files
+          .where((f) => f.path != null)
+          .map((f) => f.path!)
+          .toList();
+      if (paths.isNotEmpty) {
+        await appState.importPaths(paths);
+      }
     }
   }
 }
