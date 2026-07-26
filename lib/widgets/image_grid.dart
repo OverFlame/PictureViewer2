@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../db/image_dao.dart';
 import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
+import '../utils/log_util.dart';
 
 /// 中央缩略图网格 — GridView.builder 虚拟滚动，接入 AppState
 class ImageGrid extends StatefulWidget {
@@ -35,6 +36,13 @@ class _ImageGridState extends State<ImageGrid> {
   void dispose() {
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  void _openViewer(AppState appState, int index) {
+    final images = appState.images;
+    if (images.isEmpty) return;
+    logInfo('Grid', 'Opening viewer at index $index (${images.length} images)');
+    appState.openViewer(images, index);
   }
 
   @override
@@ -72,6 +80,7 @@ class _ImageGridState extends State<ImageGrid> {
           image: appState.images[i],
           selected: appState.selectedImage?.id == appState.images[i].id,
           onTap: () => appState.selectImage(appState.images[i].id),
+          onDoubleTap: () => _openViewer(appState, i),
         ),
       ),
     );
@@ -164,11 +173,13 @@ class _ThumbnailCard extends StatelessWidget {
   final ImageItem image;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback onDoubleTap;
 
   const _ThumbnailCard({
     required this.image,
     required this.selected,
     required this.onTap,
+    required this.onDoubleTap,
   });
 
   @override
@@ -178,6 +189,7 @@ class _ThumbnailCard extends StatelessWidget {
 
     return GestureDetector(
       onTap: onTap,
+      onDoubleTap: onDoubleTap,
       child: Container(
         decoration: BoxDecoration(
           color: Catppuccin.surface0,

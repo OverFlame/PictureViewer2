@@ -6,13 +6,16 @@ import 'pages/home_page.dart';
 import 'db/database.dart';
 import 'services/thumbnail_cache.dart';
 import 'state/app_state.dart';
+import 'utils/log_util.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  logInfo('Main', '========== App starting ==========');
 
   // 初始化数据库
   await DatabaseManager.instance.init();
   // 初始化缩略图服务（创建缓存目录）
+  logInfo('Main', 'Initializing ThumbnailService');
   await ThumbnailService.instance.init();
 
   // 锁定竖屏（桌面端无影响）
@@ -32,6 +35,7 @@ Future<void> main() async {
     ),
   );
 
+  logInfo('Main', 'Launching app');
   runApp(const PictureViewerApp());
 }
 

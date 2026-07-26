@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' as io;
 import 'package:flutter/foundation.dart';
 
 import '../db/database.dart';
@@ -7,6 +8,7 @@ import '../db/tag_dao.dart';
 import '../db/folder_dao.dart';
 import '../services/import_service.dart';
 import '../services/thumbnail_cache.dart';
+import '../utils/log_util.dart';
 
 /// 标签筛选规则
 class TagFilter {
@@ -69,6 +71,49 @@ class AppState extends ChangeNotifier {
   List<VirtualFolder> _folders = [];
   List<VirtualFolder> get folders => _folders;
 
+  // ── 全屏查看器 ──
+  List<ImageItem> _viewerImages = [];
+  List<ImageItem> get viewerImages => _viewerImages;
+  int _viewerIndex = 0;
+  int get viewerIndex => _viewerIndex;
+  bool _showViewer = false;
+  bool get showViewer => _showViewer;
+
+  ImageItem? get viewerImage =>
+      _viewerIndex >= 0 && _viewerIndex < _viewerImages.length
+          ? _viewerImages[_viewerIndex]
+          : null;
+
+  /// 打开查看器 — 传入可导航的图片列表和起始索引
+  void openViewer(List<ImageItem> images, int startIndex) {
+    logInfo('AppState',
+        'openViewer: ${images.length} images, start=$startIndex');
+    _viewerImages = List.from(images);
+    _viewerIndex = startIndex.clamp(0, _viewerImages.length - 1);
+    _showViewer = true;
+    notifyListeners();
+  }
+
+  /// 关闭查看器
+  void closeViewer() {
+    logInfo('AppState', 'closeViewer');
+    _showViewer = false;
+    _viewerImages = [];
+    _viewerIndex = 0;
+    notifyListeners();
+  }
+
+  /// 查看器中导航（方向：-1=上一张, 1=下一张）
+  void navigateViewer(int direction) {
+    final newIndex = _viewerIndex + direction;
+    if (newIndex >= 0 && newIndex < _viewerImages.length) {
+      _viewerIndex = newIndex;
+      logDebug('AppState',
+          'navigateViewer: ${_viewerIndex + 1}/${_viewerImages.length}');
+      notifyListeners();
+    }
+  }
+
   // ═══════════════ 便捷访问 ═══════════════
   TagDao get _tagDao => TagDao(DatabaseManager.instance.db);
   ImageDao get _imageDao => ImageDao(DatabaseManager.instance.db);
@@ -81,14 +126,17 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _init() async {
+    logInfo('AppState', 'Initializing (loadTags + loadFolders + refresh)');
     await loadTags();
     await loadFolders();
     await refresh();
+    logInfo('AppState', 'Initialized OK');
   }
 
   // ═══════════════ 图片加载 ═══════════════
 
   Future<void> refresh() async {
+    logInfo('AppState', 'refresh() — clearing cache, reloading page 0');
     _imageTags.clear();
     _images.clear();
     _selectedId = null;
@@ -102,16 +150,20 @@ class AppState extends ChangeNotifier {
     try {
       Set<int>? filteredIds;
       if (_tagFilter.active) {
+        logInfo('AppState',
+            'Loading page with tag filter: AND=${_tagFilter.andTagIds.length} OR=${_tagFilter.orTagIds.length} NOT=${_tagFilter.notTagIds.length}');
         filteredIds = await _tagDao.getImageIdsByTags(
           andTagIds: _tagFilter.andTagIds,
           orTagIds: _tagFilter.orTagIds,
           notTagIds: _tagFilter.notTagIds,
         );
         if (filteredIds.isEmpty) {
+          logInfo('AppState', 'Tag filter returned 0 images');
           _totalCount = 0;
           _images = [];
           return;
         }
+        logInfo('AppState', 'Tag filter matched ${filteredIds.length} images');
       }
 
       if (filteredIds != null) {
@@ -132,6 +184,8 @@ class AppState extends ChangeNotifier {
         _totalCount = await _imageDao.count();
         _images = append ? [..._images, ...page] : page;
       }
+      logInfo('AppState',
+          'Page loaded: ${_images.length}/$_totalCount (offset=$offset, append=$append)');
     } finally {
       _loading = false;
       notifyListeners();
@@ -140,15 +194,18 @@ class AppState extends ChangeNotifier {
 
   Future<void> loadMore() async {
     if (_loading || _images.length >= _totalCount) return;
+    logDebug('AppState', 'loadMore (${_images.length}/$_totalCount)');
     await _loadPage(offset: _images.length, append: true);
   }
 
   void setSearchQuery(String q) {
+    logInfo('AppState', 'Search query changed: "${q.length > 30 ? '${q.substring(0, 30)}...' : q}"');
     _searchQuery = q;
     refresh();
   }
 
   void selectImage(int? id) {
+    logDebug('AppState', 'selectImage id=$id');
     _selectedId = id;
     notifyListeners();
   }
@@ -157,6 +214,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> loadTags() async {
     _allTags = await _tagDao.getAll();
+    logDebug('AppState', 'loadTags: ${_allTags.length} tags');
     notifyListeners();
   }
 
@@ -177,9 +235,11 @@ class AppState extends ChangeNotifier {
     final has = current.any((t) => t.id == tag.id);
 
     if (has) {
+      logInfo('AppState', 'Removing tag "${tag}" from image $imageId');
       await _tagDao.removeTagFromImage(imageId, tag.id!);
       current.removeWhere((t) => t.id == tag.id);
     } else {
+      logInfo('AppState', 'Adding tag "${tag}" to image $imageId');
       await _tagDao.addTagToImage(imageId, tag.id!);
       current.add(tag);
     }
@@ -195,6 +255,7 @@ class AppState extends ChangeNotifier {
                 t.namespace == (namespace.isEmpty ? 'general' : namespace));
     if (match.isNotEmpty) return match.first;
 
+    logInfo('AppState', 'Creating tag: "$name" (ns=${namespace.isEmpty ? "general" : namespace})');
     final tag = await _tagDao.insert(Tag(
       name: name,
       namespace: namespace.isEmpty ? 'general' : namespace,
@@ -205,6 +266,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> deleteTag(int tagId) async {
+    logInfo('AppState', 'Deleting tag id=$tagId');
     await _tagDao.delete(tagId);
     _imageTags.clear();
     _removeFromFilter(tagId);
@@ -227,6 +289,7 @@ class AppState extends ChangeNotifier {
     final orIds = _tagFilter.orTagIds.where((id) => id != tagId).toList();
     _tagFilter = TagFilter(
       andTagIds: list, orTagIds: orIds, notTagIds: _tagFilter.notTagIds);
+    logInfo('AppState', 'Tag AND filter: $list');
     refresh();
   }
 
@@ -236,6 +299,7 @@ class AppState extends ChangeNotifier {
     final andIds = _tagFilter.andTagIds.where((id) => id != tagId).toList();
     _tagFilter = TagFilter(
       andTagIds: andIds, orTagIds: list, notTagIds: _tagFilter.notTagIds);
+    logInfo('AppState', 'Tag OR filter: $list');
     refresh();
   }
 
@@ -246,10 +310,12 @@ class AppState extends ChangeNotifier {
     final orIds = _tagFilter.orTagIds.where((id) => id != tagId).toList();
     _tagFilter = TagFilter(
       andTagIds: andIds, orTagIds: orIds, notTagIds: list);
+    logInfo('AppState', 'Tag NOT filter: $list');
     refresh();
   }
 
   void clearTagFilters() {
+    logInfo('AppState', 'Clearing all tag filters');
     _tagFilter = const TagFilter();
     refresh();
   }
@@ -258,24 +324,34 @@ class AppState extends ChangeNotifier {
 
   Future<void> loadFolders() async {
     _folders = await _folderDao.listRoot();
+    logDebug('AppState', 'loadFolders: ${_folders.length} folders');
     notifyListeners();
   }
 
   Future<void> importDirectory(String dirPath) async {
+    logInfo('AppState', 'importDirectory: $dirPath');
+    await importPaths([dirPath]);
+  }
+
+  Future<void> importPaths(List<String> paths) async {
+    logInfo('AppState', 'importPaths: ${paths.length} path(s)');
     _importing = true;
     _importProgress = 0;
     notifyListeners();
 
     try {
       final importService = ImportService.fromDB();
-      final stream = importService.importDirectory(dirPath);
+      final stream = importService.importPaths(paths);
 
       await for (final progress in stream) {
         _importProgress = progress.percent;
         notifyListeners();
       }
+      logInfo('AppState', 'Import complete');
 
-      unawaited(_generateThumbnails(dirPath));
+      unawaited(_generateThumbnailsForPaths(paths));
+    } catch (e) {
+      logError('AppState', 'Import failed', e.toString());
     } finally {
       _importing = false;
       _importProgress = 0;
@@ -285,13 +361,23 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> _generateThumbnails(String dirPath) async {
-    final images = await _imageDao.queryByDir(dirPath);
+  Future<void> _generateThumbnailsForPaths(List<String> paths) async {
+    // 对于目录，按目录前缀查询；对于文件路径，直接生成缩略图
     final thumbnailService = ThumbnailService.instance;
-    for (final img in images) {
-      try {
-        await thumbnailService.ensureThumbnail(img.path, size: 300);
-      } catch (_) {}
+    for (final path in paths) {
+      final stat = io.FileSystemEntity.typeSync(path);
+      if (stat == io.FileSystemEntityType.directory) {
+        final images = await _imageDao.queryByDir(path);
+        for (final img in images) {
+          try {
+            await thumbnailService.ensureThumbnail(img.path, size: 300);
+          } catch (_) {}
+        }
+      } else if (stat == io.FileSystemEntityType.file) {
+        try {
+          await thumbnailService.ensureThumbnail(path, size: 300);
+        } catch (_) {}
+      }
     }
   }
 

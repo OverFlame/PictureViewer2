@@ -6,16 +6,38 @@ import 'package:provider/provider.dart';
 import '../db/image_dao.dart';
 import '../db/tag_dao.dart';
 import '../state/app_state.dart';
+import '../services/exif_service.dart';
 import '../theme/catppuccin.dart';
+import '../utils/log_util.dart';
 
 /// 右侧详情面板：选中图片信息 + 标签编辑
-class ImageDetail extends StatelessWidget {
+class ImageDetail extends StatefulWidget {
   const ImageDetail({super.key});
 
   @override
+  State<ImageDetail> createState() => _ImageDetailState();
+}
+
+class _ImageDetailState extends State<ImageDetail> {
+  ExifData? _exifData;
+  bool _exifLoading = false;
+  int? _lastImageId;
+
+  @override
   Widget build(BuildContext context) {
+    // 监听 selectedImage 变化
     final appState = context.watch<AppState>();
     final image = appState.selectedImage;
+
+    // 选中图片变化时，重新加载 EXIF
+    if (image != null && image.id != _lastImageId) {
+      _lastImageId = image.id;
+      _loadExif(image.path);
+    } else if (image == null && _lastImageId != null) {
+      _lastImageId = null;
+      _exifData = null;
+      _exifLoading = false;
+    }
 
     if (image == null) {
       return Container(
@@ -55,10 +77,103 @@ class ImageDetail extends StatelessWidget {
                   const SizedBox(height: 16),
                   _divider(),
                   const SizedBox(height: 12),
+                  _exifSection(),
+                  const SizedBox(height: 12),
+                  _divider(),
+                  const SizedBox(height: 12),
                   _tagSection(context, appState, image),
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── EXIF 信息 ──
+  void _loadExif(String path) {
+    setState(() => _exifLoading = true);
+    _exifData = null;
+    ExifService.read(path).then((data) {
+      if (mounted) {
+        setState(() {
+          _exifData = data;
+          _exifLoading = false;
+        });
+        logDebug('Detail', 'EXIF loaded for id=$_lastImageId: hasData=${data.hasData}');
+      }
+    });
+  }
+
+  Widget _exifSection() {
+    if (_exifLoading) {
+      return const Padding(
+        padding: EdgeInsets.all(8),
+        child: Center(
+          child: SizedBox(
+            width: 14, height: 14,
+            child: CircularProgressIndicator(
+                strokeWidth: 1.5, color: Catppuccin.overlay1),
+          ),
+        ),
+      );
+    }
+
+    final e = _exifData;
+    if (e == null || !e.hasData) {
+      return const Text('无 EXIF 数据',
+          style: TextStyle(
+              fontSize: 11,
+              color: Catppuccin.overlay0));
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('EXIF 信息',
+            style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Catppuccin.overlay2,
+                letterSpacing: 0.5)),
+        const SizedBox(height: 8),
+        if (e.make != null || e.model != null)
+          _exifRow('相机',
+              [e.make, e.model].whereType<String>().join(' ')),
+        if (e.dateTime != null) _exifRow('拍摄时间', e.dateTime!),
+        _exifRow('曝光',
+            '${e.exposureDisplay}  ${e.fNumberDisplay}  ${e.isoDisplay}'),
+        _exifRow('焦距', e.focalDisplay),
+        if (e.flash != null)
+          _exifRow('闪光灯', e.flash! ? '已开启' : '未开启'),
+        _exifRow('尺寸', e.dimensionDisplay),
+        if (e.lensModel != null) _exifRow('镜头', e.lensModel!),
+        if (e.software != null) _exifRow('软件', e.software!),
+        if (e.colorSpace != null) _exifRow('色彩空间', e.colorSpace!),
+        if (e.orientation != null) _exifRow('方向', e.orientation!),
+        if (e.gpsLatitude != null || e.gpsLongitude != null)
+          _exifRow('GPS', e.gpsDisplay),
+      ],
+    );
+  }
+
+  Widget _exifRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 64,
+            child: Text(label,
+                style: const TextStyle(
+                    fontSize: 11, color: Catppuccin.overlay1)),
+          ),
+          Expanded(
+            child: Text(value,
+                style: const TextStyle(
+                    fontSize: 11, color: Catppuccin.subtext1)),
           ),
         ],
       ),

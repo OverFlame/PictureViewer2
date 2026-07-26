@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import '../utils/log_util.dart';
 
 /// 虚拟文件夹
 class VirtualFolder {
@@ -53,6 +54,7 @@ class FolderDao {
       'name': name,
       'parent': parentId,
     });
+    logInfo('FolderDao', 'Created folder: id=$id name="$name" parent=$parentId');
     return VirtualFolder(id: id, name: name, parentId: parentId);
   }
 
@@ -75,7 +77,9 @@ class FolderDao {
 
   /// 删除文件夹（CASCADE 自动清理 folder_paths）
   Future<int> delete(int id) async {
-    return _db.delete('folders', where: 'id = ?', whereArgs: [id]);
+    final count = await _db.delete('folders', where: 'id = ?', whereArgs: [id]);
+    logInfo('FolderDao', 'Deleted folder id=$id (affected $count row(s))');
+    return count;
   }
 
   // ═══ 路径管理 ═══
@@ -114,6 +118,7 @@ class FolderDao {
   }) async {
     final folder = await create(name);
     await addPath(folder.id!, path);
+    logInfo('FolderDao', 'Inserted folder with path: "${name}" → $path');
     return folder;
   }
 

@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import '../utils/log_util.dart';
 
 /// 缩略图内存 LRU 缓存
 class ThumbnailMemoryCache {
@@ -54,6 +55,7 @@ class ThumbnailService {
     final appDir = await getApplicationDocumentsDirectory();
     _cacheDir = p.join(appDir.path, 'PictureViewer', 'thumbnails');
     await Directory(_cacheDir).create(recursive: true);
+    logInfo('Thumbnail', 'Cache dir: $_cacheDir');
   }
 
   /// 获取缩略图路径（不生成，仅返回路径）
@@ -86,6 +88,7 @@ class ThumbnailService {
     }
 
     // 原图解码 → 缩放 → 编码 → 写入磁盘
+    logDebug('Thumbnail', 'Generating: ${p.basename(originalPath)} (${size}px)');
     final rawBytes = await originalFile.readAsBytes();
     final codec = await ui.instantiateImageCodec(
       rawBytes,
@@ -107,6 +110,7 @@ class ThumbnailService {
     await File(targetPath).writeAsBytes(byteData.buffer.asUint8List());
 
     image.dispose();
+    logDebug('Thumbnail', 'Saved: ${p.basename(targetPath)}');
     return targetPath;
   }
 
