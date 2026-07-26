@@ -161,13 +161,22 @@ class ImageDao {
 
   // ═══ 查询 ═══
 
-  /// 分页查询（按录入时间倒序）
+  /// 分页查询（按录入时间倒序，可选搜索过滤）
   Future<List<ImageItem>> queryPage({
     int offset = 0,
     int limit = 100,
+    String? search,
   }) async {
+    String? where;
+    List<dynamic>? whereArgs;
+    if (search != null && search.isNotEmpty) {
+      where = 'filename LIKE ?';
+      whereArgs = ['%$search%'];
+    }
     final rows = await _db.query(
       'images',
+      where: where,
+      whereArgs: whereArgs,
       orderBy: 'added_at DESC',
       limit: limit,
       offset: offset,
@@ -192,11 +201,54 @@ class ImageDao {
     return rows.map(ImageItem.fromMap).toList();
   }
 
-  /// 总数
-  Future<int> count() async {
-    final result =
-        await _db.rawQuery('SELECT COUNT(*) as cnt FROM images');
+  /// 总数（可选按 ID 集合或搜索过滤）
+  Future<int> count({Set<int>? idFilter, String? search}) async {
+    if (idFilter != null && idFilter.isEmpty) return 0;
+    final conditions = <String>[];
+    final args = <dynamic>[];
+
+    if (idFilter != null) {
+      conditions.add('id IN (${idFilter.map((_) => '?').join(',')})');
+      args.addAll(idFilter);
+    }
+    if (search != null && search.isNotEmpty) {
+      conditions.add('filename LIKE ?');
+      args.add('%$search%');
+    }
+
+    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
+    final result = await _db.rawQuery(
+      'SELECT COUNT(*) as cnt FROM images $where',
+      args.isEmpty ? null : args,
+    );
     return result.first['cnt'] as int;
+  }
+
+  /// 按 ID 集合分页查询（支持 search 模糊过滤）
+  Future<List<ImageItem>> queryByIds(Set<int> ids, {
+    int offset = 0,
+    int limit = 100,
+    String? search,
+  }) async {
+    if (ids.isEmpty) return [];
+    final placeholders = ids.map((_) => '?').join(',');
+    final conditions = StringBuffer('id IN ($placeholders)');
+    final args = <dynamic>[...ids];
+
+    if (search != null && search.isNotEmpty) {
+      conditions.write(' AND filename LIKE ?');
+      args.add('%$search%');
+    }
+
+    final rows = await _db.query(
+      'images',
+      where: conditions.toString(),
+      whereArgs: args,
+      orderBy: 'added_at DESC',
+      limit: limit,
+      offset: offset,
+    );
+    return rows.map(ImageItem.fromMap).toList();
   }
 
   /// 根据 hash 去重查询

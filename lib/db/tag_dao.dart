@@ -5,19 +5,27 @@ class Tag {
   final int? id;
   final String namespace;
   final String name;
+  final String color;
 
-  const Tag({this.id, this.namespace = 'general', required this.name});
+  const Tag({
+    this.id,
+    this.namespace = 'general',
+    required this.name,
+    this.color = '#cba6f7',
+  });
 
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
         'namespace': namespace,
         'name': name,
+        'color': color,
       };
 
   factory Tag.fromMap(Map<String, dynamic> map) => Tag(
         id: map['id'] as int?,
         namespace: map['namespace'] as String? ?? 'general',
         name: map['name'] as String,
+        color: map['color'] as String? ?? '#cba6f7',
       );
 
   @override
@@ -84,6 +92,12 @@ class TagDao {
 
   Future<int> delete(int id) async {
     return _db.delete('tags', where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// 获取所有标签（简单列表，不带计数）
+  Future<List<Tag>> getAll() async {
+    final rows = await _db.query('tags', orderBy: 'namespace, name');
+    return rows.map(Tag.fromMap).toList();
   }
 
   // ═══ 查询 ═══
@@ -171,33 +185,63 @@ class TagDao {
     return rows.map(Tag.fromMap).toList();
   }
 
-  /// 获取带有指定标签的图片 ID（支持多标签 AND/OR）
-  Future<Set<int>> getImageIdsByTags(List<int> tagIds,
-      {bool andMode = true}) async {
-    if (tagIds.isEmpty) return {};
+  /// 获取带有指定标签的图片 ID（支持多标签 AND/OR/NOT）
+  ///
+  /// [andTagIds] — 必须同时拥有这些标签 (AND)
+  /// [orTagIds]  — 至少拥有其中一个标签 (OR)
+  /// [notTagIds] — 排除拥有这些标签的图片 (NOT)
+  ///
+  /// 组合：先 AND 取交集，再 OR 求并集，再 NOT 排除
+  Future<Set<int>> getImageIdsByTags({
+    List<int> andTagIds = const [],
+    List<int> orTagIds = const [],
+    List<int> notTagIds = const [],
+  }) async {
+    Set<int>? result;
 
-    if (andMode) {
-      // AND: INTERSECT 每个 tag 的图片 ID 集合
-      Set<int>? result;
-      for (final tagId in tagIds) {
+    // 1) AND 交集
+    if (andTagIds.isNotEmpty) {
+      for (final tagId in andTagIds) {
         final rows = await _db.query('image_tags',
             columns: ['image_id'],
             where: 'tag_id = ?',
             whereArgs: [tagId]);
         final ids = rows.map((r) => r['image_id'] as int).toSet();
         result = result == null ? ids : result.intersection(ids);
-        if (result.isEmpty) break; // 提前终止
+        if (result.isEmpty) return {};
       }
-      return result ?? {};
-    } else {
-      // OR: UNION
-      final placeholders = tagIds.map((_) => '?').join(',');
+    }
+
+    // 2) OR 并集
+    if (orTagIds.isNotEmpty) {
+      final placeholders = orTagIds.map((_) => '?').join(',');
       final rows = await _db.query('image_tags',
           columns: ['DISTINCT image_id'],
           where: 'tag_id IN ($placeholders)',
-          whereArgs: tagIds);
-      return rows.map((r) => r['image_id'] as int).toSet();
+          whereArgs: orTagIds);
+      final ids = rows.map((r) => r['image_id'] as int).toSet();
+      result = result == null ? ids : result.intersection(ids);
+      if (result.isEmpty) return {};
     }
+
+    // 无任何筛选 → 返回所有已关联标签的图片 (用 UNION 获取)
+    if (result == null) {
+      final rows = await _db.rawQuery('SELECT DISTINCT image_id FROM image_tags');
+      result = rows.map((r) => r['image_id'] as int).toSet();
+    }
+
+    // 3) NOT 排除
+    if (notTagIds.isNotEmpty) {
+      final placeholders = notTagIds.map((_) => '?').join(',');
+      final rows = await _db.query('image_tags',
+          columns: ['DISTINCT image_id'],
+          where: 'tag_id IN ($placeholders)',
+          whereArgs: notTagIds);
+      final excluded = rows.map((r) => r['image_id'] as int).toSet();
+      result.removeAll(excluded);
+    }
+
+    return result;
   }
 
   /// 批量获取图片的标签（减少 N+1 查询）

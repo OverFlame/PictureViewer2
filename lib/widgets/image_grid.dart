@@ -71,7 +71,7 @@ class _ImageGridState extends State<ImageGrid> {
         itemBuilder: (ctx, i) => _ThumbnailCard(
           image: appState.images[i],
           selected: appState.selectedImage?.id == appState.images[i].id,
-          onTap: () => appState.selectImage(appState.images[i]),
+          onTap: () => appState.selectImage(appState.images[i].id),
         ),
       ),
     );
