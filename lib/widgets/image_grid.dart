@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -125,46 +126,12 @@ class _ImageGridState extends State<ImageGrid> {
   }
 
   Future<void> _pickFolder(BuildContext context, AppState appState) async {
-    // 使用简陋但可用的文件夹选择方式
-    // 桌面端可直接用 TextField + 手动输入路径
-    final ctrl = TextEditingController();
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Catppuccin.mantle,
-        title: const Text('输入文件夹路径', style: TextStyle(color: Catppuccin.text)),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '例如: D:\\Pictures',
-            border: OutlineInputBorder(),
-          ),
-          style: const TextStyle(color: Catppuccin.text, fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-            child: const Text('导入'),
-          ),
-        ],
-      ),
+    // 与左侧文件夹面板一致：使用系统文件夹浏览对话框
+    final result = await FilePicker.getDirectoryPath(
+      dialogTitle: '选择包含图片的文件夹',
     );
-
-    if (result != null && result.isNotEmpty && Directory(result).existsSync()) {
-      if (context.mounted) {
-        appState.importDirectory(result);
-      }
-    } else if (result != null && result.isNotEmpty) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('文件夹不存在，请检查路径')),
-        );
-      }
+    if (result != null && result.isNotEmpty && context.mounted) {
+      await appState.importDirectory(result);
     }
   }
 }

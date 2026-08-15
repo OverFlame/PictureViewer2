@@ -10,6 +10,7 @@ import '../db/folder_dao.dart';
 import '../services/import_service.dart';
 import '../services/settings_service.dart';
 import '../services/thumbnail_cache.dart';
+import '../utils/filter_expression.dart';
 import '../utils/log_util.dart';
 
 /// 标签筛选规则
@@ -57,6 +58,11 @@ class AppState extends ChangeNotifier {
   TagFilter get tagFilter => _tagFilter;
   Set<int> get activeTagIds =>
       {..._tagFilter.andTagIds, ..._tagFilter.orTagIds, ..._tagFilter.notTagIds};
+
+  // ── 高级筛选表达式（与标签筛选互斥，激活后替换之） ──
+  String _advancedFilter = '';
+  String get advancedFilter => _advancedFilter;
+  bool get hasAdvancedFilter => _advancedFilter.trim().isNotEmpty;
 
   // ── 标签缓存 ──
   List<Tag> _allTags = [];
@@ -178,7 +184,18 @@ class AppState extends ChangeNotifier {
       }
 
       Set<int>? filteredIds;
-      if (_tagFilter.active) {
+      if (hasAdvancedFilter) {
+        logInfo('AppState', 'Loading page with advanced filter: "$_advancedFilter"');
+        filteredIds =
+            await _tagDao.getImageIdsByExpression(_advancedFilter, _allTags);
+        if (filteredIds.isEmpty) {
+          logInfo('AppState', 'Advanced filter returned 0 images');
+          _totalCount = 0;
+          _images = [];
+          return;
+        }
+        logInfo('AppState', 'Advanced filter matched ${filteredIds.length} images');
+      } else if (_tagFilter.active) {
         logInfo('AppState',
             'Loading page with tag filter: AND=${_tagFilter.andTagIds.length} OR=${_tagFilter.orTagIds.length} NOT=${_tagFilter.notTagIds.length}');
         filteredIds = await _tagDao.getImageIdsByTags(
@@ -242,7 +259,11 @@ class AppState extends ChangeNotifier {
       limit: 100000,
       search: _searchQuery.isEmpty ? null : _searchQuery,
     );
-    if (_tagFilter.active) {
+    if (hasAdvancedFilter) {
+      final ids =
+          await _tagDao.getImageIdsByExpression(_advancedFilter, _allTags);
+      list = list.where((i) => ids.contains(i.id)).toList();
+    } else if (_tagFilter.active) {
       final ids = await _tagDao.getImageIdsByTags(
         andTagIds: _tagFilter.andTagIds,
         orTagIds: _tagFilter.orTagIds,
@@ -342,6 +363,7 @@ class AppState extends ChangeNotifier {
   // ── 标签筛选切换 ──
 
   void toggleAndFilter(int tagId) {
+    _advancedFilter = ''; // 与高级筛选互斥
     final list = List<int>.from(_tagFilter.andTagIds);
     list.contains(tagId) ? list.remove(tagId) : list.add(tagId);
     // 同一标签互斥：从 OR / NOT 中移除，避免矛盾表达式
@@ -354,6 +376,7 @@ class AppState extends ChangeNotifier {
   }
 
   void toggleOrFilter(int tagId) {
+    _advancedFilter = ''; // 与高级筛选互斥
     final list = List<int>.from(_tagFilter.orTagIds);
     list.contains(tagId) ? list.remove(tagId) : list.add(tagId);
     final andIds = _tagFilter.andTagIds.where((id) => id != tagId).toList();
@@ -365,6 +388,7 @@ class AppState extends ChangeNotifier {
   }
 
   void toggleNotFilter(int tagId) {
+    _advancedFilter = ''; // 与高级筛选互斥
     final list = List<int>.from(_tagFilter.notTagIds);
     list.contains(tagId) ? list.remove(tagId) : list.add(tagId);
     final andIds = _tagFilter.andTagIds.where((id) => id != tagId).toList();
@@ -379,6 +403,31 @@ class AppState extends ChangeNotifier {
     logInfo('AppState', 'Clearing all tag filters');
     _tagFilter = const TagFilter();
     refresh();
+  }
+
+  // ═══════════════ 高级筛选表达式 ═══════════════
+
+  /// 应用高级筛选表达式（空字符串表示清除）。
+  /// 语法错误抛出 [FilterExpressionException]；启用时替换简单标签筛选。
+  Future<void> setAdvancedFilter(String expression) async {
+    final expr = expression.trim();
+    if (expr.isEmpty) {
+      await clearAdvancedFilter();
+      return;
+    }
+    FilterExpressionParser.parse(expr); // 仅做语法校验，标签名在查询时解析
+    _advancedFilter = expr;
+    _tagFilter = const TagFilter();
+    logInfo('AppState', 'Advanced filter set: "$expr"');
+    await refresh();
+  }
+
+  /// 清除高级筛选表达式
+  Future<void> clearAdvancedFilter() async {
+    if (!hasAdvancedFilter) return;
+    _advancedFilter = '';
+    logInfo('AppState', 'Advanced filter cleared');
+    await refresh();
   }
 
   // ═══════════════ 文件夹 ═══════════════

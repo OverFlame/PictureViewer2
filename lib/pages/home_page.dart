@@ -8,6 +8,7 @@ import '../widgets/tag_panel.dart';
 import '../widgets/image_grid.dart';
 import '../widgets/image_detail.dart';
 import '../widgets/image_viewer.dart';
+import '../widgets/filter_dialog.dart';
 import '../utils/log_util.dart';
 import 'settings_page.dart';
 
@@ -210,6 +211,8 @@ class _HomePageState extends State<HomePage> {
           const Divider(height: 1),
           // 面包屑导航（进入文件夹后显示）
           if (appState.currentFolder != null) const _BreadcrumbBar(),
+          // 高级筛选活跃提示条
+          if (appState.hasAdvancedFilter) const _AdvancedFilterBar(),
           const Expanded(child: ImageGrid()),
           const _BottomStatusBar(),
         ],
@@ -270,8 +273,9 @@ class _TopToolbar extends StatelessWidget {
           const SizedBox(width: 8),
           IconButton(
             icon: const Icon(Icons.filter_list, size: 18),
+            color: appState.hasAdvancedFilter ? Catppuccin.mauve : null,
             tooltip: '高级筛选',
-            onPressed: () {},
+            onPressed: () => AdvancedFilterDialog.show(context),
           ),
           IconButton(
             icon: const Icon(Icons.refresh, size: 18),
@@ -282,6 +286,52 @@ class _TopToolbar extends StatelessWidget {
             icon: const Icon(Icons.settings_outlined, size: 18),
             tooltip: '设置',
             onPressed: () => SettingsDialog.show(context),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 高级筛选活跃提示条（显示当前表达式，可编辑/清除）
+class _AdvancedFilterBar extends StatelessWidget {
+  const _AdvancedFilterBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final appState = context.watch<AppState>();
+    return Container(
+      height: 30,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      color: Catppuccin.surface0,
+      child: Row(
+        children: [
+          const Icon(Icons.filter_alt, size: 14, color: Catppuccin.mauve),
+          const SizedBox(width: 6),
+          const Text('高级筛选',
+              style: TextStyle(fontSize: 11, color: Catppuccin.overlay1)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              appState.advancedFilter,
+              style: const TextStyle(
+                  fontSize: 11, color: Catppuccin.mauve, fontFamily: 'monospace'),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          IconButton(
+            onPressed: () => AdvancedFilterDialog.show(context),
+            icon: const Icon(Icons.edit, size: 13),
+            tooltip: '编辑表达式',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+          ),
+          IconButton(
+            onPressed: () => appState.clearAdvancedFilter(),
+            icon: const Icon(Icons.close, size: 13),
+            tooltip: '清除高级筛选',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
           ),
         ],
       ),

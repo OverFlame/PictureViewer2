@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import '../utils/filter_expression.dart';
 import '../utils/log_util.dart';
 
 /// 标签数据类
@@ -253,6 +254,43 @@ class TagDao {
       args,
     );
     return rows.map((r) => r['id'] as int).toSet();
+  }
+
+  /// 根据布尔表达式筛选图片，返回匹配的图片 id 集合。
+  ///
+  /// [expression] 形如 `((A||B)&&!C)||C`；[allTags] 用于把标签名解析为 id。
+  /// 语法错误抛出 [FilterExpressionException]。
+  Future<Set<int>> getImageIdsByExpression(
+      String expression, List<Tag> allTags) async {
+    final ast = FilterExpressionParser.parse(expression);
+    final sub = buildImageIdSubquery(ast, (ref) => _resolveTagRef(ref, allTags));
+    final rows = await _db.rawQuery('SELECT id FROM images WHERE id IN ($sub)');
+    return rows.map((r) => r['id'] as int).toSet();
+  }
+
+  /// 把表达式中的标签引用解析为 tag id 列表。
+  ///
+  /// 规则：
+  /// - 引号内：按名称精确匹配（不区分大小写），忽略命名空间
+  /// - 含 `:`：按 `命名空间:名称` 匹配（不区分大小写）
+  /// - 否则：按名称跨命名空间匹配（不区分大小写），同名标签取并集
+  List<int> _resolveTagRef(TagRef ref, List<Tag> allTags) {
+    final target = ref.text.toLowerCase();
+    final Iterable<Tag> matches;
+    if (ref.quoted) {
+      matches = allTags.where((t) => t.name.toLowerCase() == target);
+    } else {
+      final ci = ref.text.indexOf(':');
+      if (ci > 0) {
+        final ns = ref.text.substring(0, ci).toLowerCase();
+        final name = ref.text.substring(ci + 1).toLowerCase();
+        matches = allTags.where(
+            (t) => t.namespace.toLowerCase() == ns && t.name.toLowerCase() == name);
+      } else {
+        matches = allTags.where((t) => t.name.toLowerCase() == target);
+      }
+    }
+    return matches.where((t) => t.id != null).map((t) => t.id!).toList();
   }
 
   /// 批量获取图片的标签（减少 N+1 查询）
