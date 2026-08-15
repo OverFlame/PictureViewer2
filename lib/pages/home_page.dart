@@ -201,14 +201,17 @@ class _HomePageState extends State<HomePage> {
 
   // ── 中央区域 ──
   Widget _buildCenter() {
+    final appState = context.watch<AppState>();
     return Container(
       color: Catppuccin.base,
       child: Column(
-        children: const [
-          _TopToolbar(),
-          Divider(height: 1),
-          Expanded(child: ImageGrid()),
-          _BottomStatusBar(),
+        children: [
+          const _TopToolbar(),
+          const Divider(height: 1),
+          // 面包屑导航（进入文件夹后显示）
+          if (appState.currentFolder != null) const _BreadcrumbBar(),
+          const Expanded(child: ImageGrid()),
+          const _BottomStatusBar(),
         ],
       ),
     );
@@ -280,6 +283,71 @@ class _TopToolbar extends StatelessWidget {
             tooltip: '设置',
             onPressed: () => SettingsDialog.show(context),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 面包屑导航栏（文件夹浏览路径）
+class _BreadcrumbBar extends StatelessWidget {
+  const _BreadcrumbBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final appState = context.watch<AppState>();
+    final crumb = appState.breadcrumb;
+
+    return Container(
+      height: 32,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      color: Catppuccin.mantle,
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: crumb.length <= 1 ? null : () => appState.goUp(),
+            icon: const Icon(Icons.arrow_upward, size: 15),
+            tooltip: '上一级',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+          ),
+          TextButton(
+            onPressed: () => appState.goRoot(),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text(
+              '全部图片',
+              style: TextStyle(fontSize: 12, color: Catppuccin.blue),
+            ),
+          ),
+          for (int i = 0; i < crumb.length; i++) ...[
+            const Icon(Icons.chevron_right,
+                size: 14, color: Catppuccin.overlay0),
+            TextButton(
+              onPressed: () => appState.enterFolder(crumb[i].id!),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(
+                crumb[i].name,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: i == crumb.length - 1
+                      ? FontWeight.w600
+                      : FontWeight.normal,
+                  color: i == crumb.length - 1
+                      ? Catppuccin.text
+                      : Catppuccin.subtext0,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
         ],
       ),
     );

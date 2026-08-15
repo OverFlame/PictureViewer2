@@ -7,6 +7,7 @@ import '../db/image_dao.dart';
 import '../db/tag_dao.dart';
 import '../state/app_state.dart';
 import '../services/exif_service.dart';
+import '../services/thumbnail_cache.dart';
 import '../theme/catppuccin.dart';
 import '../utils/log_util.dart';
 import 'export_actions.dart';
@@ -74,6 +75,9 @@ class _ImageDetailState extends State<ImageDetail> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // 大图预览（保持纵横比，点击打开全屏查看器）
+                  _ImagePreview(image: image),
+                  const SizedBox(height: 12),
                   _fileInfoSection(image),
                   const SizedBox(height: 16),
                   _divider(),
@@ -301,6 +305,128 @@ class _ImageDetailState extends State<ImageDetail> {
 
   Widget _divider() {
     return const Divider(height: 1, color: Catppuccin.surface0);
+  }
+}
+
+/// 详情栏顶部大图预览：懒加载 800px 缩略图，保持纵横比，点击打开全屏查看器
+class _ImagePreview extends StatefulWidget {
+  final ImageItem image;
+  const _ImagePreview({required this.image});
+
+  @override
+  State<_ImagePreview> createState() => _ImagePreviewState();
+}
+
+class _ImagePreviewState extends State<_ImagePreview> {
+  String? _previewPath;
+  bool _loading = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(_ImagePreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.image.path != widget.image.path) {
+      _previewPath = null;
+      _loading = true;
+      _failed = false;
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    try {
+      final path = await ThumbnailService.instance
+          .ensureThumbnail(widget.image.path, size: 800);
+      if (mounted) {
+        setState(() {
+          _previewPath = path;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _failed = true;
+        });
+      }
+      logDebug('Detail', 'Preview load failed: ${widget.image.path} ($e)');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        final appState = context.read<AppState>();
+        appState.openViewer([widget.image], 0);
+      },
+      child: Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: Catppuccin.surface0,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: _buildContent(),
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    if (_loading) {
+      return const SizedBox(
+        height: 180,
+        child: Center(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Catppuccin.overlay1,
+            ),
+          ),
+        ),
+      );
+    }
+    if (_failed || _previewPath == null) {
+      return const SizedBox(
+        height: 120,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.broken_image_outlined,
+                  size: 32, color: Catppuccin.overlay0),
+              SizedBox(height: 6),
+              Text('预览不可用',
+                  style: TextStyle(fontSize: 11, color: Catppuccin.overlay1)),
+            ],
+          ),
+        ),
+      );
+    }
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 260),
+      child: Image.file(
+        File(_previewPath!),
+        width: double.infinity,
+        fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => const SizedBox(
+          height: 120,
+          child: Center(
+            child: Icon(Icons.broken_image_outlined,
+                size: 32, color: Catppuccin.overlay0),
+          ),
+        ),
+      ),
+    );
   }
 }
 

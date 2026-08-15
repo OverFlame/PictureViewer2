@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../db/image_dao.dart';
+import '../services/thumbnail_cache.dart';
 import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
 import '../utils/log_util.dart';
@@ -168,8 +169,8 @@ class _ImageGridState extends State<ImageGrid> {
   }
 }
 
-/// 单个缩略图卡片
-class _ThumbnailCard extends StatelessWidget {
+/// 单个缩略图卡片（懒加载：缺失时自动生成缩略图）
+class _ThumbnailCard extends StatefulWidget {
   final ImageItem image;
   final bool selected;
   final VoidCallback onTap;
@@ -183,30 +184,71 @@ class _ThumbnailCard extends StatelessWidget {
   });
 
   @override
+  State<_ThumbnailCard> createState() => _ThumbnailCardState();
+}
+
+class _ThumbnailCardState extends State<_ThumbnailCard> {
+  bool _thumbReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAndGenerate();
+  }
+
+  @override
+  void didUpdateWidget(_ThumbnailCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.image.path != widget.image.path) {
+      _thumbReady = false;
+      _checkAndGenerate();
+    }
+  }
+
+  Future<void> _checkAndGenerate() async {
+    final path = widget.image.path;
+    final thumbFile =
+        File(ThumbnailService.instance.thumbPath(path, size: 300));
+    if (thumbFile.existsSync()) {
+      if (mounted) setState(() => _thumbReady = true);
+      return;
+    }
+    try {
+      await ThumbnailService.instance.ensureThumbnail(path, size: 300);
+      if (mounted) setState(() => _thumbReady = true);
+    } catch (e) {
+      logDebug('Grid', 'Thumbnail generate failed: $path ($e)');
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final appState = context.read<AppState>();
-    final thumbFile = File(appState.thumbPath(image.path));
+    final thumbFile =
+        File(ThumbnailService.instance.thumbPath(widget.image.path, size: 300));
 
     return GestureDetector(
-      onTap: onTap,
-      onDoubleTap: onDoubleTap,
+      onTap: widget.onTap,
+      onDoubleTap: widget.onDoubleTap,
       child: Container(
         decoration: BoxDecoration(
           color: Catppuccin.surface0,
           borderRadius: BorderRadius.circular(4),
           border: Border.all(
-            color: selected ? Catppuccin.mauve : Colors.transparent,
-            width: selected ? 2 : 0,
+            color: widget.selected ? Catppuccin.mauve : Colors.transparent,
+            width: widget.selected ? 2 : 0,
           ),
         ),
         clipBehavior: Clip.antiAlias,
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // 缩略图（如果已缓存）或占位图标
-            if (thumbFile.existsSync())
-              Image.file(thumbFile, fit: BoxFit.cover, errorBuilder: (_, __, ___) =>
-                  _placeholder())
+            // 缩略图（懒加载生成）或占位图标
+            if (_thumbReady && thumbFile.existsSync())
+              Image.file(
+                thumbFile,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => _placeholder(),
+              )
             else
               _placeholder(),
 
@@ -219,7 +261,7 @@ class _ThumbnailCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                 color: Colors.black54,
                 child: Text(
-                  image.filename,
+                  widget.image.filename,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(

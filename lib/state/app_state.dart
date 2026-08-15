@@ -73,6 +73,18 @@ class AppState extends ChangeNotifier {
   List<VirtualFolder> _folders = [];
   List<VirtualFolder> get folders => _folders;
 
+  // ── 文件夹浏览（资源管理器式） ──
+  int? _currentFolderId;
+  int? get currentFolderId => _currentFolderId;
+  VirtualFolder? _currentFolder;
+  VirtualFolder? get currentFolder => _currentFolder;
+  String? _currentFolderPath;
+  String? get currentFolderPath => _currentFolderPath;
+  List<VirtualFolder> _breadcrumb = [];
+  List<VirtualFolder> get breadcrumb => _breadcrumb;
+  int _folderVersion = 0;
+  int get folderVersion => _folderVersion;
+
   // ── 设置 ──
   ThemeMode _themeMode = ThemeMode.dark;
   ThemeMode get themeMode => _themeMode;
@@ -159,6 +171,12 @@ class AppState extends ChangeNotifier {
     _loading = true;
     notifyListeners();
     try {
+      // 文件夹浏览模式：只显示当前文件夹直接包含的图片
+      if (_currentFolderId != null) {
+        await _loadFolderImages();
+        return;
+      }
+
       Set<int>? filteredIds;
       if (_tagFilter.active) {
         logInfo('AppState',
@@ -207,6 +225,35 @@ class AppState extends ChangeNotifier {
     if (_loading || _images.length >= _totalCount) return;
     logDebug('AppState', 'loadMore (${_images.length}/$_totalCount)');
     await _loadPage(offset: _images.length, append: true);
+  }
+
+  /// 加载当前文件夹直接包含的图片（资源管理器语义：不含子文件夹内图片）
+  Future<void> _loadFolderImages() async {
+    final folderPath = _currentFolderPath;
+    if (folderPath == null || folderPath.isEmpty) {
+      // 手动创建的虚拟文件夹（未关联物理目录）
+      _totalCount = 0;
+      _images = [];
+      logInfo('AppState', 'Folder has no physical path, showing empty');
+      return;
+    }
+    var list = await _imageDao.queryDirectInDir(
+      folderPath,
+      limit: 100000,
+      search: _searchQuery.isEmpty ? null : _searchQuery,
+    );
+    if (_tagFilter.active) {
+      final ids = await _tagDao.getImageIdsByTags(
+        andTagIds: _tagFilter.andTagIds,
+        orTagIds: _tagFilter.orTagIds,
+        notTagIds: _tagFilter.notTagIds,
+      );
+      list = list.where((i) => ids.contains(i.id)).toList();
+    }
+    _images = list;
+    _totalCount = list.length;
+    logInfo('AppState',
+        'Folder images loaded: ${list.length} in "$folderPath"');
   }
 
   void setSearchQuery(String q) {
@@ -412,6 +459,100 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 加载某文件夹的直接子文件夹（树形懒加载）
+  Future<List<VirtualFolder>> loadChildFolders(int parentId) async {
+    return _folderDao.listChildren(parentId);
+  }
+
+  /// 进入文件夹（资源管理器式浏览）
+  Future<void> enterFolder(int folderId) async {
+    final folder = await _folderDao.getById(folderId);
+    if (folder == null) return;
+    logInfo('AppState', 'enterFolder: #$folderId "${folder.name}"');
+    _currentFolderId = folderId;
+    _currentFolder = folder;
+    final paths = await _folderDao.getPaths(folderId);
+    _currentFolderPath = paths.isEmpty ? null : paths.first.path;
+    _breadcrumb = await _buildBreadcrumb(folder);
+    await refresh();
+  }
+
+  /// 返回「全部图片」根视图
+  Future<void> goRoot() async {
+    logInfo('AppState', 'goRoot (all images)');
+    _currentFolderId = null;
+    _currentFolder = null;
+    _currentFolderPath = null;
+    _breadcrumb = [];
+    await refresh();
+  }
+
+  /// 返回上一级文件夹
+  Future<void> goUp() async {
+    if (_breadcrumb.length <= 1) {
+      await goRoot();
+      return;
+    }
+    final parent = _breadcrumb[_breadcrumb.length - 2];
+    await enterFolder(parent.id!);
+  }
+
+  Future<List<VirtualFolder>> _buildBreadcrumb(VirtualFolder folder) async {
+    final chain = <VirtualFolder>[folder];
+    var current = folder;
+    while (current.parentId != null) {
+      final parent = await _folderDao.getById(current.parentId!);
+      if (parent == null) break;
+      chain.insert(0, parent);
+      current = parent;
+    }
+    return chain;
+  }
+
+  /// 新建文件夹（parentId 为空则在根级创建）
+  Future<VirtualFolder> createFolder(String name, {int? parentId}) async {
+    final folder = await _folderDao.create(name, parentId: parentId);
+    logInfo('AppState', 'createFolder: "$name" parent=$parentId');
+    await _reloadFolderTree();
+    return folder;
+  }
+
+  Future<void> renameFolder(int id, String newName) async {
+    await _folderDao.rename(id, newName);
+    logInfo('AppState', 'renameFolder: #$id -> "$newName"');
+    if (_currentFolderId == id) {
+      _currentFolder = VirtualFolder(
+          id: id, name: newName, parentId: _currentFolder?.parentId);
+      _breadcrumb = _breadcrumb
+          .map((f) => f.id == id
+              ? VirtualFolder(id: f.id, name: newName, parentId: f.parentId)
+              : f)
+          .toList();
+    }
+    await _reloadFolderTree();
+  }
+
+  Future<void> deleteFolder(int id) async {
+    await _folderDao.delete(id);
+    logInfo('AppState', 'deleteFolder: #$id');
+    if (_currentFolderId == id) {
+      await goRoot();
+    } else {
+      await _reloadFolderTree();
+    }
+  }
+
+  Future<void> moveFolder(int id, int? newParentId) async {
+    await _folderDao.move(id, newParentId);
+    logInfo('AppState', 'moveFolder: #$id -> parent=$newParentId');
+    await _reloadFolderTree();
+  }
+
+  Future<void> _reloadFolderTree() async {
+    _folderVersion++;
+    await loadFolders();
+  }
+
   Future<void> importDirectory(String dirPath) async {
     logInfo('AppState', 'importDirectory: $dirPath');
     await importPaths([dirPath]);
@@ -440,6 +581,7 @@ class AppState extends ChangeNotifier {
       _importing = false;
       _importProgress = 0;
       notifyListeners();
+      _folderVersion++;
       await loadFolders();
       await refresh();
     }

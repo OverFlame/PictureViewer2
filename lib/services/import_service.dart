@@ -62,16 +62,17 @@ class ImportService {
     try {
       // 1. 扫描所有路径：目录递归扫描，文件直接检查
       final allPaths = <String>{};
-      final folderNames = <String>[];
+      final rootDirs = <String>[];
 
       for (final path in paths) {
         final stat = FileSystemEntity.typeSync(path);
         if (stat == FileSystemEntityType.directory) {
           final scanned = await FileScanner.scanDirectory(path);
           allPaths.addAll(scanned);
-          folderNames.add(p.basename(path));
+          rootDirs.add(path);
         } else if (stat == FileSystemEntityType.file && isImageFile(path)) {
           allPaths.add(path);
+          rootDirs.add(p.dirname(path));
         }
       }
 
@@ -125,25 +126,9 @@ class ImportService {
         );
       }
 
-      // 3. 创建文件夹记录
-      final folderDirs = FileScanner.collectFolders(newPaths);
-      logInfo('Import', 'importPaths: creating ${folderDirs.length} folder record(s)');
-      for (final d in folderDirs) {
-        final folderName = p.basename(d);
-        final found = await _folderDao.getByPath(d);
-        if (found == null) {
-          await _folderDao.insert(name: folderName, path: d);
-        }
-      }
-
-      // 4. 如果只拖入了单文件（无文件夹记录），创建手动导入记录
-      if (folderDirs.isEmpty) {
-        final now = DateTime.now();
-        final importName = '手动导入 '
-            '${now.month.toString().padLeft(2, '0')}/${now.day.toString().padLeft(2, '0')} '
-            '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-        await _folderDao.insert(name: importName, path: '');
-      }
+      // 3. 镜像物理目录，建立文件夹层级
+      await _mirrorFolderTree(rootDirs, imagePaths);
+      logInfo('Import', 'importPaths: folder tree mirrored for ${rootDirs.length} root(s)');
     } finally {
       _isImporting = false;
     }
@@ -211,15 +196,9 @@ class ImportService {
         );
       }
 
-      // 5. 创建文件夹记录
-      final folderDirs = FileScanner.collectFolders(newPaths);
-      for (final d in folderDirs) {
-        final folderName = p.basename(d);
-        final found = await _folderDao.getByPath(d);
-        if (found == null) {
-          await _folderDao.insert(name: folderName, path: d);
-        }
-      }
+      // 5. 镜像物理目录，建立文件夹层级
+      await _mirrorFolderTree([dirPath], imagePaths);
+      logInfo('Import', 'importDirectory: folder tree mirrored for "$dirPath"');
     } finally {
       _isImporting = false;
     }
@@ -289,5 +268,81 @@ class ImportService {
     } finally {
       _isImporting = false;
     }
+  }
+
+  // ═══ 文件夹层级镜像 ═══
+
+  /// 按物理磁盘目录镜像建立文件夹父子层级（类似 Windows 资源管理器）。
+  /// 对每个 [roots] 根目录，扫描其下图片所在的目录链，为每个目录创建
+  /// 文件夹节点并建立 parent 关系；已存在的节点则修正其 parent。
+  Future<void> _mirrorFolderTree(
+      List<String> roots, List<String> imagePaths) async {
+    for (final root in roots) {
+      final rootNorm = _normPath(root);
+      if (rootNorm.isEmpty) continue;
+
+      // 收集该根目录下涉及的所有目录（图片父目录及其祖先）
+      final dirs = <String>{};
+      for (final img in imagePaths) {
+        final imgNorm = _normPath(img);
+        if (!_isUnder(imgNorm, rootNorm)) continue;
+        var dir = p.dirname(imgNorm);
+        while (true) {
+          dir = _normPath(dir);
+          dirs.add(dir);
+          if (dir == rootNorm) break;
+          final parent = p.dirname(dir);
+          if (_normPath(parent) == dir) break; // 到达文件系统根
+          dir = parent;
+        }
+      }
+
+      // 按目录深度从浅到深排序，保证父目录先创建
+      final sorted = dirs.toList()
+        ..sort((a, b) => _dirDepth(a).compareTo(_dirDepth(b)));
+
+      final map = <String, VirtualFolder>{};
+      for (final dir in sorted) {
+        final parentDir = _normPath(p.dirname(dir));
+        final expectedParentId = map[parentDir]?.id;
+
+        var folder = await _folderDao.getByPath(dir);
+        if (folder == null) {
+          final name = p.basename(dir);
+          final displayName = name.isEmpty ? dir : name;
+          folder = await _folderDao.create(displayName,
+              parentId: expectedParentId);
+          await _folderDao.addPath(folder.id!, dir, recursive: false);
+        } else if (folder.parentId != expectedParentId) {
+          // 已存在但层级不符，修正 parent（重新导入时渐进修复旧扁平结构）
+          await _folderDao.move(folder.id!, expectedParentId);
+          folder = VirtualFolder(
+              id: folder.id, name: folder.name, parentId: expectedParentId);
+        }
+        map[dir] = folder;
+      }
+    }
+  }
+
+  /// 归一化路径：去掉末尾分隔符
+  static String _normPath(String s) {
+    var x = s;
+    while (x.endsWith('\\') || x.endsWith('/')) {
+      x = x.substring(0, x.length - 1);
+    }
+    return x;
+  }
+
+  /// 判断 [path] 是否位于 [dir] 之下（大小写不敏感，兼容 / 与 \）
+  static bool _isUnder(String path, String dir) {
+    final a = path.toLowerCase();
+    final b = dir.toLowerCase();
+    if (a == b) return false;
+    return a.startsWith('$b\\') || a.startsWith('$b/');
+  }
+
+  /// 目录深度（按分隔符数量）
+  static int _dirDepth(String dir) {
+    return dir.split(RegExp(r'[\\/]')).length;
   }
 }
