@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../db/folder_dao.dart';
 import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
+import 'move_folder_dialog.dart';
 
 /// 左侧文件夹面板：导入 + 树形文件夹浏览（资源管理器式）
 class FolderPanel extends StatefulWidget {
@@ -472,6 +473,19 @@ class _FolderTreeNodeState extends State<_FolderTreeNode> {
     }
   }
 
+  Future<void> _moveTo(AppState appState) async {
+    final allFolders = await appState.loadAllFolders();
+    if (!mounted) return;
+    final target = await showMoveFolderDialog(
+      context,
+      source: widget.folder,
+      allFolders: allFolders,
+    );
+    if (target == null || !mounted) return; // 取消
+    final newParentId = target == kMoveToRoot ? null : target;
+    await appState.moveFolder(widget.folder.id!, newParentId);
+  }
+
   Future<String?> _promptName(String title, {String? initial}) async {
     final controller = TextEditingController(text: initial);
     final result = await showDialog<String>(
@@ -578,11 +592,10 @@ class _FolderTreeNodeState extends State<_FolderTreeNode> {
                         value: 'rename',
                         child: Text('重命名', style: TextStyle(fontSize: 12)),
                       ),
-                      if (widget.folder.parentId != null)
-                        const PopupMenuItem(
-                          value: 'move_root',
-                          child: Text('移动到根级', style: TextStyle(fontSize: 12)),
-                        ),
+                      const PopupMenuItem(
+                        value: 'move',
+                        child: Text('移动到...', style: TextStyle(fontSize: 12)),
+                      ),
                       const PopupMenuItem(
                         value: 'delete',
                         child: Text('删除',
@@ -618,8 +631,8 @@ class _FolderTreeNodeState extends State<_FolderTreeNode> {
       case 'rename':
         _rename(appState);
         break;
-      case 'move_root':
-        appState.moveFolder(widget.folder.id!, null);
+      case 'move':
+        _moveTo(appState);
         break;
       case 'delete':
         _delete(appState);

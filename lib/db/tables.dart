@@ -2,7 +2,7 @@
 class Tables {
   Tables._();
 
-  static const int version = 1;
+  static const int version = 2;
 
   /// 所有建表 SQL（按依赖顺序）
   static const List<String> createStatements = [
@@ -33,6 +33,7 @@ class Tables {
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       namespace  TEXT    NOT NULL DEFAULT 'general',
       name       TEXT    NOT NULL,
+      color      TEXT    NOT NULL DEFAULT '#cba6f7',
       UNIQUE(namespace, name)
     )
     ''',
@@ -70,7 +71,6 @@ class Tables {
 
   /// 迁移脚本（按 version 递增），未来版本在此追加
   static const Map<int, List<String>> migrations = {
-    // version 2 示例：
-    // 2: ['ALTER TABLE images ADD COLUMN color_palette TEXT'],
+    2: ["ALTER TABLE tags ADD COLUMN color TEXT NOT NULL DEFAULT '#cba6f7'"],
   };
 }
