@@ -75,8 +75,32 @@ class FolderDao {
         where: 'id = ?', whereArgs: [id]);
   }
 
-  /// 删除文件夹（CASCADE 自动清理 folder_paths）
+  /// 根据 id 查询文件夹
+  Future<VirtualFolder?> getById(int id) async {
+    final rows =
+        await _db.query('folders', where: 'id = ?', whereArgs: [id]);
+    if (rows.isEmpty) return null;
+    return VirtualFolder.fromMap(rows.first);
+  }
+
+  /// 移动文件夹到新的父级（null 表示移动到根级）
+  Future<int> move(int id, int? newParentId) async {
+    return _db.update('folders', {'parent': newParentId},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// 查询某文件夹的直接子文件夹数量（用于树形 UI 判断是否可展开）
+  Future<int> countChildren(int parentId) async {
+    final count = Sqflite.firstIntValue(await _db.rawQuery(
+        'SELECT COUNT(*) FROM folders WHERE parent = ?', [parentId]));
+    return count ?? 0;
+  }
+
+  /// 删除文件夹（CASCADE 自动清理 folder_paths；子文件夹上移到根级）
   Future<int> delete(int id) async {
+    // 先将其子文件夹上移为根级，避免层级断裂
+    await _db.update('folders', {'parent': null},
+        where: 'parent = ?', whereArgs: [id]);
     final count = await _db.delete('folders', where: 'id = ?', whereArgs: [id]);
     logInfo('FolderDao', 'Deleted folder id=$id (affected $count row(s))');
     return count;

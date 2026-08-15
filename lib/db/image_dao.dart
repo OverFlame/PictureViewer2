@@ -204,6 +204,56 @@ class ImageDao {
     return rows.map(ImageItem.fromMap).toList();
   }
 
+  /// 查询某目录下「直接包含」的图片（不含更深层子目录），用于资源管理器式浏览。
+  /// 例如 dirPath = D:\Photos\2024 只匹配 D:\Photos\2024\a.jpg，
+  /// 不匹配 D:\Photos\2024\vacation\b.jpg。
+  Future<List<ImageItem>> queryDirectInDir(String dirPath,
+      {int offset = 0, int limit = 200, String? search}) async {
+    final (prefix, sep) = _directPrefix(dirPath);
+    final conditions = <String>['path LIKE ?', 'path NOT LIKE ?'];
+    final args = <dynamic>['$prefix%', '$prefix%$sep%'];
+    if (search != null && search.isNotEmpty) {
+      conditions.add('filename LIKE ?');
+      args.add('%$search%');
+    }
+    final rows = await _db.query(
+      'images',
+      where: conditions.join(' AND '),
+      whereArgs: args,
+      orderBy: 'added_at DESC',
+      limit: limit,
+      offset: offset,
+    );
+    return rows.map(ImageItem.fromMap).toList();
+  }
+
+  /// 统计某目录下「直接包含」的图片数量
+  Future<int> countDirectInDir(String dirPath, {String? search}) async {
+    final (prefix, sep) = _directPrefix(dirPath);
+    final conditions = <String>['path LIKE ?', 'path NOT LIKE ?'];
+    final args = <dynamic>['$prefix%', '$prefix%$sep%'];
+    if (search != null && search.isNotEmpty) {
+      conditions.add('filename LIKE ?');
+      args.add('%$search%');
+    }
+    final where = 'WHERE ${conditions.join(' AND ')}';
+    final result = await _db.rawQuery(
+      'SELECT COUNT(*) AS cnt FROM images $where',
+      args,
+    );
+    return result.first['cnt'] as int;
+  }
+
+  /// 归一化目录路径，返回 (带分隔符的前缀, 分隔符)
+  static (String, String) _directPrefix(String dirPath) {
+    var base = dirPath;
+    if (base.endsWith('\\') || base.endsWith('/')) {
+      base = base.substring(0, base.length - 1);
+    }
+    final sep = base.contains('\\') ? '\\' : '/';
+    return ('$base$sep', sep);
+  }
+
   /// 总数（可选按 ID 集合或搜索过滤）
   Future<int> count({Set<int>? idFilter, String? search}) async {
     if (idFilter != null && idFilter.isEmpty) return 0;
