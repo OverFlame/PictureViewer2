@@ -344,9 +344,11 @@ class AppState extends ChangeNotifier {
   void toggleAndFilter(int tagId) {
     final list = List<int>.from(_tagFilter.andTagIds);
     list.contains(tagId) ? list.remove(tagId) : list.add(tagId);
+    // 同一标签互斥：从 OR / NOT 中移除，避免矛盾表达式
     final orIds = _tagFilter.orTagIds.where((id) => id != tagId).toList();
+    final notIds = _tagFilter.notTagIds.where((id) => id != tagId).toList();
     _tagFilter = TagFilter(
-      andTagIds: list, orTagIds: orIds, notTagIds: _tagFilter.notTagIds);
+      andTagIds: list, orTagIds: orIds, notTagIds: notIds);
     logInfo('AppState', 'Tag AND filter: $list');
     refresh();
   }
@@ -355,8 +357,9 @@ class AppState extends ChangeNotifier {
     final list = List<int>.from(_tagFilter.orTagIds);
     list.contains(tagId) ? list.remove(tagId) : list.add(tagId);
     final andIds = _tagFilter.andTagIds.where((id) => id != tagId).toList();
+    final notIds = _tagFilter.notTagIds.where((id) => id != tagId).toList();
     _tagFilter = TagFilter(
-      andTagIds: andIds, orTagIds: list, notTagIds: _tagFilter.notTagIds);
+      andTagIds: andIds, orTagIds: list, notTagIds: notIds);
     logInfo('AppState', 'Tag OR filter: $list');
     refresh();
   }
@@ -462,6 +465,11 @@ class AppState extends ChangeNotifier {
   /// 加载某文件夹的直接子文件夹（树形懒加载）
   Future<List<VirtualFolder>> loadChildFolders(int parentId) async {
     return _folderDao.listChildren(parentId);
+  }
+
+  /// 加载所有文件夹（带 parent 关系，用于移动选择器等完整树场景）
+  Future<List<VirtualFolder>> loadAllFolders() async {
+    return _folderDao.listAll();
   }
 
   /// 进入文件夹（资源管理器式浏览）

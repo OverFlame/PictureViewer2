@@ -70,6 +70,12 @@ class FolderDao {
     return rows.map(VirtualFolder.fromMap).toList();
   }
 
+  /// 获取所有文件夹（带 parent 关系，用于构建完整树）
+  Future<List<VirtualFolder>> listAll() async {
+    final rows = await _db.query('folders', orderBy: 'name');
+    return rows.map(VirtualFolder.fromMap).toList();
+  }
+
   Future<int> rename(int id, String newName) async {
     return _db.update('folders', {'name': newName},
         where: 'id = ?', whereArgs: [id]);
