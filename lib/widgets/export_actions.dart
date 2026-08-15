@@ -89,15 +89,32 @@ class ExportActions extends StatelessWidget {
   }
 
   // ── 打开文件位置 ──
-  void _openLocation(BuildContext context) {
+  Future<void> _openLocation(BuildContext context) async {
     final img = image;
     if (img == null) return;
-    _openFileLocation(img.path);
+    await _openFileLocation(img.path);
   }
 
-  void _openFileLocation(String path) {
+  /// 在系统文件管理器中定位并显示文件。
+  ///
+  /// 各平台实现：
+  /// - Windows: `explorer /select,<path>` 在资源管理器中选中该文件
+  /// - macOS:   `open -R <path>` 在 Finder 中显示该文件
+  /// - Linux:   `xdg-open <目录>`（xdg-open 无法选中单个文件，退而打开其所在目录）
+  Future<void> _openFileLocation(String path) async {
     try {
-      Process.run('explorer', ['/select,', path]);
+      ProcessResult result;
+      if (Platform.isWindows) {
+        result = await Process.run('explorer', ['/select,$path']);
+      } else if (Platform.isMacOS) {
+        result = await Process.run('open', ['-R', path]);
+      } else {
+        result = await Process.run('xdg-open', [p.dirname(path)]);
+      }
+      if (result.exitCode != 0 && result.stderr.toString().isNotEmpty) {
+        logWarn('Export',
+            'Open file location exited ${result.exitCode}: ${result.stderr}');
+      }
     } catch (e) {
       logError('Export', 'Failed to open file location', e.toString());
     }
