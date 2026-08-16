@@ -14,6 +14,7 @@ class ImageItem {
   final String? hash;
   final int addedAt;
   final String? note;
+  final String? alias;
 
   const ImageItem({
     this.id,
@@ -27,6 +28,7 @@ class ImageItem {
     this.hash,
     required this.addedAt,
     this.note,
+    this.alias,
   });
 
   ImageItem copyWith({
@@ -41,6 +43,7 @@ class ImageItem {
     String? hash,
     int? addedAt,
     String? note,
+    String? alias,
   }) {
     return ImageItem(
       id: id ?? this.id,
@@ -54,6 +57,7 @@ class ImageItem {
       hash: hash ?? this.hash,
       addedAt: addedAt ?? this.addedAt,
       note: note ?? this.note,
+      alias: alias ?? this.alias,
     );
   }
 
@@ -69,6 +73,7 @@ class ImageItem {
         'hash': hash,
         'added_at': addedAt,
         'note': note,
+        'alias': alias,
       };
 
   factory ImageItem.fromMap(Map<String, dynamic> map) => ImageItem(
@@ -83,6 +88,7 @@ class ImageItem {
         hash: map['hash'] as String?,
         addedAt: map['added_at'] as int,
         note: map['note'] as String?,
+        alias: map['alias'] as String?,
       );
 }
 
@@ -121,6 +127,14 @@ class ImageDao {
     if (image.id == null) return 0;
     return _db.update('images', image.toMap(),
         where: 'id = ?', whereArgs: [image.id]);
+  }
+
+  /// 设置/清除图片别名（null 表示清除）
+  Future<void> setAlias(int id, String? alias) async {
+    final v = (alias == null || alias.trim().isEmpty) ? null : alias.trim();
+    await _db.update('images', {'alias': v},
+        where: 'id = ?', whereArgs: [id]);
+    logDebug('ImageDao', 'setAlias id=$id -> $v');
   }
 
   /// 删除单条（CASCADE 自动清理 image_tags）
@@ -302,6 +316,29 @@ class ImageDao {
       offset: offset,
     );
     return rows.map(ImageItem.fromMap).toList();
+  }
+
+  /// 按文件名或别名模糊搜索（用于搜索模式）
+  Future<List<ImageItem>> searchByName(String q, {int limit = 100000}) async {
+    final rows = await _db.query(
+      'images',
+      where: 'filename LIKE ? OR alias LIKE ?',
+      whereArgs: ['%$q%', '%$q%'],
+      orderBy: 'added_at DESC',
+      limit: limit,
+    );
+    return rows.map(ImageItem.fromMap).toList();
+  }
+
+  /// 查询一批图片 id 对应的路径（用于树筛选）
+  Future<List<String>> pathsByIds(Set<int> ids) async {
+    if (ids.isEmpty) return [];
+    final placeholders = ids.map((_) => '?').join(',');
+    final rows = await _db.query('images',
+        columns: ['path'],
+        where: 'id IN ($placeholders)',
+        whereArgs: ids.toList());
+    return rows.map((r) => r['path'] as String).toList();
   }
 
   /// 根据 hash 去重查询

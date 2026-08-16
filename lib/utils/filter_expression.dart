@@ -6,6 +6,7 @@
 /// - 优先级：`!` > `&&` > `||`，括号 `()` 改变优先级
 ///
 /// 示例：`((A||B)&&!C)||C`
+library;
 
 /// 表达式语法错误
 class FilterExpressionException implements Exception {

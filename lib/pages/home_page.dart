@@ -9,6 +9,7 @@ import '../widgets/image_grid.dart';
 import '../widgets/image_detail.dart';
 import '../widgets/image_viewer.dart';
 import '../widgets/filter_dialog.dart';
+import '../widgets/tag_picker_dialog.dart';
 import '../utils/log_util.dart';
 import 'settings_page.dart';
 
@@ -213,6 +214,8 @@ class _HomePageState extends State<HomePage> {
           if (appState.currentFolder != null) const _BreadcrumbBar(),
           // 高级筛选活跃提示条
           if (appState.hasAdvancedFilter) const _AdvancedFilterBar(),
+          // 多选操作条
+          if (appState.selectedIds.isNotEmpty) const _SelectionBar(),
           const Expanded(child: ImageGrid()),
           const _BottomStatusBar(),
         ],
@@ -271,6 +274,35 @@ class _TopToolbar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
+          PopupMenuButton<String>(
+            tooltip: '排序方式',
+            icon: const Icon(Icons.sort, size: 18),
+            onSelected: (v) => appState.setSortKey(v),
+            itemBuilder: (_) => [
+              _sortItem('添加时间', 'added_at', appState.sortKey),
+              _sortItem('文件名', 'filename', appState.sortKey),
+              _sortItem('别名', 'alias', appState.sortKey),
+              _sortItem('文件大小', 'file_size', appState.sortKey),
+              _sortItem('修改时间', 'file_mtime', appState.sortKey),
+            ],
+          ),
+          IconButton(
+            icon: Icon(
+              appState.sortDescending ? Icons.arrow_downward : Icons.arrow_upward,
+              size: 18,
+            ),
+            tooltip: appState.sortDescending ? '降序（点击切换升序）' : '升序（点击切换降序）',
+            onPressed: () => appState.setSortDescending(!appState.sortDescending),
+          ),
+          IconButton(
+            icon: Icon(
+              appState.viewMode == 'grid' ? Icons.view_list : Icons.grid_view,
+              size: 18,
+            ),
+            tooltip: appState.viewMode == 'grid' ? '切换到列表' : '切换到网格',
+            onPressed: () =>
+                appState.setViewMode(appState.viewMode == 'grid' ? 'list' : 'grid'),
+          ),
           IconButton(
             icon: const Icon(Icons.filter_list, size: 18),
             color: appState.hasAdvancedFilter ? Catppuccin.mauve : null,
@@ -287,6 +319,21 @@ class _TopToolbar extends StatelessWidget {
             tooltip: '设置',
             onPressed: () => SettingsDialog.show(context),
           ),
+        ],
+      ),
+    );
+  }
+
+  PopupMenuItem<String> _sortItem(String label, String key, String current) {
+    return PopupMenuItem<String>(
+      value: key,
+      child: Row(
+        children: [
+          SizedBox(
+              width: 72,
+              child: Text(label, style: const TextStyle(fontSize: 12))),
+          if (current == key)
+            const Icon(Icons.check, size: 14, color: Catppuccin.mauve),
         ],
       ),
     );
@@ -332,6 +379,61 @@ class _AdvancedFilterBar extends StatelessWidget {
             tooltip: '清除高级筛选',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 多选操作条（批量添加标签 / 清除选择）
+class _SelectionBar extends StatelessWidget {
+  const _SelectionBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final appState = context.watch<AppState>();
+    return Container(
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      color: Catppuccin.surface0,
+      child: Row(
+        children: [
+          Text('已选 ${appState.selectedIds.length} 项',
+              style: const TextStyle(fontSize: 11, color: Catppuccin.overlay1)),
+          const SizedBox(width: 12),
+          TextButton.icon(
+            onPressed: () async {
+              final tags = await showTagPickerDialog(context, title: '批量添加标签');
+              if (tags != null && tags.isNotEmpty) {
+                await appState.addTagsToImages(appState.selectedIds, tags);
+              }
+            },
+            icon: const Icon(Icons.sell_outlined, size: 14),
+            label: const Text('添加标签', style: TextStyle(fontSize: 12)),
+            style: TextButton.styleFrom(foregroundColor: Catppuccin.mauve),
+          ),
+          const SizedBox(width: 4),
+          TextButton.icon(
+            onPressed: () async {
+              final ids = await appState.getTagIdsOnImages(appState.selectedIds);
+              if (!context.mounted) return;
+              final tags = await showTagPickerDialog(context,
+                  title: '批量移除标签', filterTagIds: ids);
+              if (tags != null && tags.isNotEmpty) {
+                await appState.removeTagsFromImages(appState.selectedIds, tags);
+              }
+            },
+            icon: const Icon(Icons.label_off_outlined, size: 14),
+            label: const Text('移除标签', style: TextStyle(fontSize: 12)),
+            style: TextButton.styleFrom(foregroundColor: Catppuccin.red),
+          ),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: () => appState.clearSelection(),
+            icon: const Icon(Icons.close, size: 14),
+            label: const Text('清除选择', style: TextStyle(fontSize: 12)),
+            style: TextButton.styleFrom(foregroundColor: Catppuccin.overlay1),
           ),
         ],
       ),
@@ -416,8 +518,12 @@ class _BottomStatusBar extends StatelessWidget {
     if (appState.importing) {
       leftText = '导入中 ${(appState.importProgress * 100).toStringAsFixed(0)}%';
     } else {
-      leftText = '${appState.totalCount} 张图片'
-          '${appState.images.length < appState.totalCount ? " (已加载 ${appState.images.length})" : ""}';
+      final folders = appState.centerFolders.length;
+      final images = appState.images.length;
+      leftText = '$folders 个文件夹 · $images 张图片';
+      if (appState.selectedIds.length > 1) {
+        leftText = '已选 ${appState.selectedIds.length} 项 · $leftText';
+      }
     }
 
     return Container(

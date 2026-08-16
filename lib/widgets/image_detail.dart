@@ -31,10 +31,13 @@ class _ImageDetailState extends State<ImageDetail> {
     final appState = context.watch<AppState>();
     final image = appState.selectedImage;
 
-    // 选中图片变化时，重新加载 EXIF
+    // 选中图片变化时，重新加载 EXIF（延后到帧后，避免 build 期间 setState）
     if (image != null && image.id != _lastImageId) {
       _lastImageId = image.id;
-      _loadExif(image.path);
+      final path = image.path;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _loadExif(path);
+      });
     } else if (image == null && _lastImageId != null) {
       _lastImageId = null;
       _exifData = null;
@@ -230,6 +233,7 @@ class _ImageDetailState extends State<ImageDetail> {
                 letterSpacing: 0.5)),
         const SizedBox(height: 8),
         _row('文件名', image.filename),
+        _aliasRow(image),
         _row('格式', (image.format ?? '?').toUpperCase()),
         _row('尺寸',
             '${image.width ?? '?'} x ${image.height ?? '?'}'),
@@ -259,6 +263,53 @@ class _ImageDetailState extends State<ImageDetail> {
           ),
       ],
     );
+  }
+
+  Widget _aliasRow(ImageItem image) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(
+            width: 64,
+            child: Text('别名',
+                style: TextStyle(fontSize: 11, color: Catppuccin.overlay1)),
+          ),
+          Expanded(
+            child: Text(
+              image.alias?.isNotEmpty == true ? image.alias! : '—',
+              style: const TextStyle(fontSize: 11, color: Catppuccin.text),
+            ),
+          ),
+          GestureDetector(
+            onTap: () => _editAlias(image),
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Icon(Icons.edit_outlined,
+                  size: 16, color: Catppuccin.overlay1),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editAlias(ImageItem image) async {
+    final appState = context.read<AppState>();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (_) => _AliasDialog(initial: image.alias ?? ''),
+    );
+    if (result != null && image.id != null) {
+      await appState.setImageAlias(
+          image.id!, result.trim().isEmpty ? null : result.trim());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('别名已更新')));
+      }
+    }
   }
 
   Widget _row(String label, String value, {bool mono = false}) {
@@ -305,6 +356,56 @@ class _ImageDetailState extends State<ImageDetail> {
 
   Widget _divider() {
     return const Divider(height: 1, color: Catppuccin.surface0);
+  }
+}
+
+/// 别名编辑对话框（自持 TextEditingController，生命周期随对话框）
+class _AliasDialog extends StatefulWidget {
+  final String initial;
+  const _AliasDialog({required this.initial});
+
+  @override
+  State<_AliasDialog> createState() => _AliasDialogState();
+}
+
+class _AliasDialogState extends State<_AliasDialog> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initial);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Catppuccin.mantle,
+      title: const Text('设置别名', style: TextStyle(color: Catppuccin.text)),
+      content: TextField(
+        controller: _ctrl,
+        autofocus: true,
+        decoration: const InputDecoration(hintText: '留空清除别名'),
+        style: const TextStyle(color: Catppuccin.text, fontSize: 13),
+        onSubmitted: (v) => Navigator.pop(context, v),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消', style: TextStyle(color: Catppuccin.overlay1)),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _ctrl.text),
+          child: const Text('保存'),
+        ),
+      ],
+    );
   }
 }
 

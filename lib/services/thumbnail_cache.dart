@@ -3,9 +3,9 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:crypto/crypto.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import '../utils/log_util.dart';
+import 'data_dir_service.dart';
 
 /// 缩略图内存 LRU 缓存
 class ThumbnailMemoryCache {
@@ -55,8 +55,8 @@ class ThumbnailService {
   String get cacheDir => _cacheDir;
 
   Future<void> init() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    _cacheDir = p.join(appDir.path, 'PictureViewer', 'thumbnails');
+    // 缩略图随数据目录走（可迁移）
+    _cacheDir = p.join(await DataDirService.instance.dataDir, 'thumbnails');
     await Directory(_cacheDir).create(recursive: true);
     logInfo('Thumbnail', 'Cache dir: $_cacheDir');
   }

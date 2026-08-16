@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/app_state.dart';
@@ -49,6 +50,14 @@ class SettingsDialog extends StatelessWidget {
               _sectionTitle('缩略图缓存'),
               const SizedBox(height: 8),
               _cacheSizeSelector(appState, context),
+              const SizedBox(height: 16),
+              _sectionTitle('高级筛选'),
+              const SizedBox(height: 8),
+              _exprCacheSelector(appState),
+              const SizedBox(height: 16),
+              _sectionTitle('数据位置'),
+              const SizedBox(height: 8),
+              _dataLocationSelector(context, appState),
               const SizedBox(height: 20),
               const Divider(color: Catppuccin.surface0),
               const SizedBox(height: 12),
@@ -336,6 +345,113 @@ class SettingsDialog extends StatelessWidget {
         }
       }
       logInfo('Settings', 'Cache cleared');
+    }
+  }
+
+  // ── 高级筛选：表达式历史缓存条数 ──
+  Widget _exprCacheSelector(AppState appState) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Catppuccin.surface0,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          const Text('表达式历史缓存条数',
+              style: TextStyle(fontSize: 12, color: Catppuccin.subtext1)),
+          const Spacer(),
+          _iconButton(
+            icon: Icons.remove,
+            onTap: appState.maxExprCacheCount > 0
+                ? () => appState.setMaxExprCacheCount(appState.maxExprCacheCount - 1)
+                : null,
+          ),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 28,
+            child: Text(
+              '${appState.maxExprCacheCount}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w600, color: Catppuccin.text),
+            ),
+          ),
+          const SizedBox(width: 12),
+          _iconButton(
+            icon: Icons.add,
+            onTap: appState.maxExprCacheCount < 100
+                ? () => appState.setMaxExprCacheCount(appState.maxExprCacheCount + 1)
+                : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── 数据位置 + 迁移 ──
+  Widget _dataLocationSelector(BuildContext context, AppState appState) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Catppuccin.surface0,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          FutureBuilder<String>(
+            future: appState.getDataDir(),
+            builder: (ctx, snap) => Text(
+              '当前数据目录：${snap.data ?? '...'}',
+              style: const TextStyle(
+                  fontSize: 11, color: Catppuccin.subtext0, fontFamily: 'monospace'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () => _changeDataDir(context, appState),
+            icon: const Icon(Icons.drive_file_move_outline, size: 14),
+            label: const Text('更改位置并迁移...', style: TextStyle(fontSize: 12)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Catppuccin.mauve,
+              side: const BorderSide(color: Catppuccin.surface1),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _changeDataDir(BuildContext context, AppState appState) async {
+    final dir = await FilePicker.getDirectoryPath(dialogTitle: '选择新的数据目录');
+    if (dir == null || !context.mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Catppuccin.mantle,
+        title: const Text('迁移数据', style: TextStyle(color: Catppuccin.text)),
+        content: Text(
+          '将把数据库、缩略图缓存和设置复制到：\n$dir\n\n旧目录保留不删除，应用会重新加载数据库。',
+          style: const TextStyle(color: Catppuccin.subtext0, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: Catppuccin.overlay1)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('迁移'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    await appState.migrateDataDir(dir);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('数据已迁移')));
     }
   }
 

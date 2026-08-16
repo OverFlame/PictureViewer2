@@ -6,6 +6,7 @@ import '../db/folder_dao.dart';
 import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
 import 'move_folder_dialog.dart';
+import 'tag_picker_dialog.dart';
 
 /// 左侧文件夹面板：导入 + 树形文件夹浏览（资源管理器式）
 class FolderPanel extends StatefulWidget {
@@ -345,32 +346,60 @@ class _FolderPanelState extends State<FolderPanel> {
     }
   }
 
-  Future<String?> _promptFolderName(String title, {String? initial}) async {
-    final controller = TextEditingController(text: initial);
-    final result = await showDialog<String>(
+  Future<String?> _promptFolderName(String title, {String? initial}) {
+    return showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
-          decoration: const InputDecoration(hintText: '文件夹名称'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('确定'),
-          ),
-        ],
-      ),
+      builder: (_) => _PromptDialog(title: title, initial: initial ?? ''),
     );
-    controller.dispose();
-    return result;
+  }
+}
+
+/// 文本输入对话框（自持 controller，生命周期随对话框，避免 use-after-dispose）
+class _PromptDialog extends StatefulWidget {
+  final String title;
+  final String initial;
+  const _PromptDialog({required this.title, this.initial = ''});
+
+  @override
+  State<_PromptDialog> createState() => _PromptDialogState();
+}
+
+class _PromptDialogState extends State<_PromptDialog> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initial);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _ctrl,
+        autofocus: true,
+        onSubmitted: (v) => Navigator.pop(context, v.trim()),
+        decoration: const InputDecoration(hintText: '文件夹名称'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, _ctrl.text.trim()),
+          child: const Text('确定'),
+        ),
+      ],
+    );
   }
 }
 
@@ -486,32 +515,11 @@ class _FolderTreeNodeState extends State<_FolderTreeNode> {
     await appState.moveFolder(widget.folder.id!, newParentId);
   }
 
-  Future<String?> _promptName(String title, {String? initial}) async {
-    final controller = TextEditingController(text: initial);
-    final result = await showDialog<String>(
+  Future<String?> _promptName(String title, {String? initial}) {
+    return showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
-          decoration: const InputDecoration(hintText: '文件夹名称'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('确定'),
-          ),
-        ],
-      ),
+      builder: (_) => _PromptDialog(title: title, initial: initial ?? ''),
     );
-    controller.dispose();
-    return result;
   }
 
   @override
@@ -597,6 +605,15 @@ class _FolderTreeNodeState extends State<_FolderTreeNode> {
                         child: Text('移动到...', style: TextStyle(fontSize: 12)),
                       ),
                       const PopupMenuItem(
+                        value: 'tags',
+                        child: Text('添加标签...', style: TextStyle(fontSize: 12)),
+                      ),
+                      const PopupMenuItem(
+                        value: 'untag',
+                        child: Text('移除标签...', style: TextStyle(fontSize: 12)),
+                      ),
+                      const PopupMenuDivider(),
+                      const PopupMenuItem(
                         value: 'delete',
                         child: Text('删除',
                             style: TextStyle(
@@ -634,9 +651,80 @@ class _FolderTreeNodeState extends State<_FolderTreeNode> {
       case 'move':
         _moveTo(appState);
         break;
+      case 'tags':
+        _addTags(appState);
+        break;
+      case 'untag':
+        _removeTags(appState);
+        break;
       case 'delete':
         _delete(appState);
         break;
     }
+  }
+
+  Future<void> _addTags(AppState appState) async {
+    final tags = await showTagPickerDialog(context, title: '为文件夹添加标签');
+    if (tags == null || tags.isEmpty || !mounted) return;
+    final recursive = await _confirmSync(
+      content: '是否把该标签同步到文件夹内所有图片及子文件夹（一直到底层图片）？',
+      folderOnlyLabel: '仅标记文件夹',
+      syncLabel: '同步到所有图片',
+    );
+    if (recursive == null || !mounted) return;
+    await appState.addTagsToFolder(widget.folder.id!, tags, recursive: recursive);
+  }
+
+  Future<void> _removeTags(AppState appState) async {
+    final folderTags = await appState.getFolderTags(widget.folder.id!);
+    final ids = folderTags.map((t) => t.id).whereType<int>().toSet();
+    if (!mounted) return;
+    if (ids.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('该文件夹没有标签')));
+      return;
+    }
+    final tags = await showTagPickerDialog(context,
+        title: '移除文件夹标签', filterTagIds: ids);
+    if (tags == null || tags.isEmpty || !mounted) return;
+    final recursive = await _confirmSync(
+      content: '是否同步移除该标签（文件夹内所有图片及子文件夹）？',
+      folderOnlyLabel: '仅移除文件夹标签',
+      syncLabel: '同步移除所有图片',
+    );
+    if (recursive == null || !mounted) return;
+    await appState.removeTagsFromFolder(widget.folder.id!, tags,
+        recursive: recursive);
+  }
+
+  /// 询问是否递归同步；返回 null=取消, true=同步, false=仅当前文件夹
+  Future<bool?> _confirmSync({
+    required String content,
+    required String folderOnlyLabel,
+    required String syncLabel,
+  }) async {
+    return showDialog<bool?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Catppuccin.mantle,
+        title: const Text('同步操作', style: TextStyle(color: Catppuccin.text)),
+        content: Text(content,
+            style: const TextStyle(color: Catppuccin.subtext1, fontSize: 13)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消', style: TextStyle(color: Catppuccin.overlay1)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(folderOnlyLabel, style: const TextStyle(fontSize: 12)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(syncLabel),
+          ),
+        ],
+      ),
+    );
   }
 }

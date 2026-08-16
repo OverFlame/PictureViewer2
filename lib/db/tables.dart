@@ -2,7 +2,7 @@
 class Tables {
   Tables._();
 
-  static const int version = 2;
+  static const int version = 3;
 
   /// 所有建表 SQL（按依赖顺序）
   static const List<String> createStatements = [
@@ -19,7 +19,8 @@ class Tables {
       file_mtime  INTEGER,
       hash        TEXT,
       added_at    INTEGER NOT NULL,
-      note        TEXT
+      note        TEXT,
+      alias       TEXT
     )
     ''',
 
@@ -67,10 +68,31 @@ class Tables {
       recursive INTEGER NOT NULL DEFAULT 1
     )
     ''',
+
+    // 文件夹↔标签 多对多（文件夹可持有标签）
+    '''
+    CREATE TABLE folder_tags (
+      folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+      tag_id    INTEGER NOT NULL REFERENCES tags(id)    ON DELETE CASCADE,
+      PRIMARY KEY (folder_id, tag_id)
+    )
+    ''',
+    'CREATE INDEX IF NOT EXISTS idx_folder_tags_tag ON folder_tags(tag_id)',
   ];
 
   /// 迁移脚本（按 version 递增），未来版本在此追加
   static const Map<int, List<String>> migrations = {
     2: ["ALTER TABLE tags ADD COLUMN color TEXT NOT NULL DEFAULT '#cba6f7'"],
+    3: [
+      "ALTER TABLE images ADD COLUMN alias TEXT",
+      '''
+      CREATE TABLE folder_tags (
+        folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+        tag_id    INTEGER NOT NULL REFERENCES tags(id)    ON DELETE CASCADE,
+        PRIMARY KEY (folder_id, tag_id)
+      )
+      ''',
+      "CREATE INDEX IF NOT EXISTS idx_folder_tags_tag ON folder_tags(tag_id)",
+    ],
   };
 }

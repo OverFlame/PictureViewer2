@@ -72,6 +72,29 @@ class _AdvancedFilterDialogState extends State<AdvancedFilterDialog> {
     return s;
   }
 
+  Widget _historyChip(String expr) {
+    return GestureDetector(
+      onTap: () {
+        _ctrl.text = expr;
+        _ctrl.selection = TextSelection.collapsed(offset: expr.length);
+        setState(() => _error = null);
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        decoration: BoxDecoration(
+          color: Catppuccin.surface0,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: Catppuccin.surface1),
+        ),
+        child: Text(expr,
+            style: const TextStyle(
+                fontSize: 11,
+                color: Catppuccin.subtext1,
+                fontFamily: 'monospace')),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final appState = context.watch<AppState>();
@@ -114,6 +137,32 @@ class _AdvancedFilterDialogState extends State<AdvancedFilterDialog> {
                 errorText: _error,
               ),
             ),
+            if (appState.expressionHistory.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Text('历史',
+                      style: TextStyle(fontSize: 11, color: Catppuccin.overlay1)),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () async {
+                      await appState.clearExpressionHistory();
+                      if (mounted) setState(() {});
+                    },
+                    child: const Text('清空',
+                        style:
+                            TextStyle(fontSize: 11, color: Catppuccin.overlay0)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children:
+                    appState.expressionHistory.map(_historyChip).toList(),
+              ),
+            ],
             if (tags.isNotEmpty) ...[
               const SizedBox(height: 12),
               const Text('可用标签（点击插入）',
