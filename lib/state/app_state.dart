@@ -7,6 +7,7 @@ import '../db/database.dart';
 import '../db/image_dao.dart';
 import '../db/tag_dao.dart';
 import '../db/folder_dao.dart';
+import '../services/data_dir_service.dart';
 import '../services/import_service.dart';
 import '../services/settings_service.dart';
 import '../services/thumbnail_cache.dart';
@@ -38,7 +39,7 @@ class AppState extends ChangeNotifier {
   bool _loading = false;
   bool get loading => _loading;
 
-  // ── 选中 ──
+  // ── 选中（单选 + 多选） ──
   int? _selectedId;
   int? get selectedId => _selectedId;
   ImageItem? get selectedImage =>
@@ -48,6 +49,10 @@ class AppState extends ChangeNotifier {
                 (i) => i?.id == _selectedId,
                 orElse: () => null,
               );
+  final Set<int> _selectedIds = {};
+  Set<int> get selectedIds => _selectedIds;
+  bool isSelected(int id) => _selectedIds.contains(id);
+  int? _anchorId;
 
   // ── 搜索 ──
   String _searchQuery = '';
@@ -91,6 +96,10 @@ class AppState extends ChangeNotifier {
   int _folderVersion = 0;
   int get folderVersion => _folderVersion;
 
+  // ── 中间栏文件树（子文件夹 + 直接图片） ──
+  List<VirtualFolder> _centerFolders = [];
+  List<VirtualFolder> get centerFolders => _centerFolders;
+
   // ── 设置 ──
   ThemeMode _themeMode = ThemeMode.dark;
   ThemeMode get themeMode => _themeMode;
@@ -98,6 +107,14 @@ class AppState extends ChangeNotifier {
   int get gridColumns => _gridColumns;
   int _cacheSizeMB = 2048;
   int get cacheSizeMB => _cacheSizeMB;
+
+  // ── 排序 / 视图 ──
+  String _sortKey = 'added_at';
+  String get sortKey => _sortKey;
+  bool _sortDescending = true;
+  bool get sortDescending => _sortDescending;
+  String _viewMode = 'grid';
+  String get viewMode => _viewMode;
 
   // ── 全屏查看器 ──
   List<ImageItem> _viewerImages = [];
@@ -169,112 +186,163 @@ class AppState extends ChangeNotifier {
     _imageTags.clear();
     _images.clear();
     _selectedId = null;
+    _selectedIds.clear();
+    _anchorId = null;
     notifyListeners();
-    await _loadPage(offset: 0);
+    await _loadCenter();
   }
 
-  Future<void> _loadPage({int offset = 0, bool append = false}) async {
+  /// 加载中间栏内容（资源管理器式：子文件夹 + 直接图片；搜索时扁平）。
+  Future<void> _loadCenter() async {
     _loading = true;
     notifyListeners();
     try {
-      // 文件夹浏览模式：只显示当前文件夹直接包含的图片
-      if (_currentFolderId != null) {
-        await _loadFolderImages();
+      final search = _searchQuery.trim();
+      final filterActive = hasAdvancedFilter || _tagFilter.active;
+
+      // 搜索：扁平结果（匹配文件名或别名）
+      if (search.isNotEmpty) {
+        _centerFolders = [];
+        var list = await _imageDao.searchByName(search);
+        if (filterActive) {
+          final ids = await _computeMatchingIds();
+          list = list.where((i) => ids.contains(i.id)).toList();
+        }
+        _images = _sortImagesList(list);
+        _totalCount = _images.length;
+        logInfo('AppState', 'Search "$search": ${_images.length} results');
         return;
       }
 
-      Set<int>? filteredIds;
-      if (hasAdvancedFilter) {
-        logInfo('AppState', 'Loading page with advanced filter: "$_advancedFilter"');
-        filteredIds =
-            await _tagDao.getImageIdsByExpression(_advancedFilter, _allTags);
-        if (filteredIds.isEmpty) {
-          logInfo('AppState', 'Advanced filter returned 0 images');
-          _totalCount = 0;
-          _images = [];
-          return;
-        }
-        logInfo('AppState', 'Advanced filter matched ${filteredIds.length} images');
-      } else if (_tagFilter.active) {
-        logInfo('AppState',
-            'Loading page with tag filter: AND=${_tagFilter.andTagIds.length} OR=${_tagFilter.orTagIds.length} NOT=${_tagFilter.notTagIds.length}');
-        filteredIds = await _tagDao.getImageIdsByTags(
-          andTagIds: _tagFilter.andTagIds,
-          orTagIds: _tagFilter.orTagIds,
-          notTagIds: _tagFilter.notTagIds,
-        );
-        if (filteredIds.isEmpty) {
-          logInfo('AppState', 'Tag filter returned 0 images');
-          _totalCount = 0;
-          _images = [];
-          return;
-        }
-        logInfo('AppState', 'Tag filter matched ${filteredIds.length} images');
+      // 文件夹 / 根：子文件夹 + 直接图片
+      List<VirtualFolder> folders;
+      List<ImageItem> images;
+      if (_currentFolderId != null) {
+        folders = await _folderDao.listChildren(_currentFolderId!);
+        final folderPath = _currentFolderPath;
+        images = (folderPath == null || folderPath.isEmpty)
+            ? <ImageItem>[]
+            : await _imageDao.queryDirectInDir(folderPath, limit: 100000);
+      } else {
+        folders = await _folderDao.listRoot();
+        images = <ImageItem>[];
       }
 
-      if (filteredIds != null) {
-        final page = await _imageDao.queryByIds(
-          filteredIds,
-          offset: offset,
-          limit: 100,
-          search: _searchQuery.isEmpty ? null : _searchQuery,
-        );
-        _totalCount = await _imageDao.count(idFilter: filteredIds);
-        _images = append ? [..._images, ...page] : page;
-      } else {
-        final page = await _imageDao.queryPage(
-          offset: offset,
-          limit: 100,
-          search: _searchQuery.isEmpty ? null : _searchQuery,
-        );
-        _totalCount = await _imageDao.count();
-        _images = append ? [..._images, ...page] : page;
+      if (filterActive) {
+        final ids = await _computeMatchingIds();
+        images = images.where((i) => ids.contains(i.id)).toList();
+        folders = await _filterFolders(folders, ids);
       }
+
+      _centerFolders = _sortFolders(folders);
+      _images = _sortImagesList(images);
+      _totalCount = _images.length;
       logInfo('AppState',
-          'Page loaded: ${_images.length}/$_totalCount (offset=$offset, append=$append)');
+          'Center loaded: ${_centerFolders.length} folders, ${_images.length} images');
     } finally {
       _loading = false;
       notifyListeners();
     }
   }
 
-  Future<void> loadMore() async {
-    if (_loading || _images.length >= _totalCount) return;
-    logDebug('AppState', 'loadMore (${_images.length}/$_totalCount)');
-    await _loadPage(offset: _images.length, append: true);
+  Future<Set<int>> _computeMatchingIds() async {
+    if (hasAdvancedFilter) {
+      return _tagDao.getImageIdsByExpression(_advancedFilter, _allTags);
+    }
+    return _tagDao.getImageIdsByTags(
+      andTagIds: _tagFilter.andTagIds,
+      orTagIds: _tagFilter.orTagIds,
+      notTagIds: _tagFilter.notTagIds,
+    );
   }
 
-  /// 加载当前文件夹直接包含的图片（资源管理器语义：不含子文件夹内图片）
-  Future<void> _loadFolderImages() async {
-    final folderPath = _currentFolderPath;
-    if (folderPath == null || folderPath.isEmpty) {
-      // 手动创建的虚拟文件夹（未关联物理目录）
-      _totalCount = 0;
-      _images = [];
-      logInfo('AppState', 'Folder has no physical path, showing empty');
-      return;
+  /// 过滤子文件夹：保留「递归包含匹配图片」或「直接持有匹配标签」的文件夹
+  Future<List<VirtualFolder>> _filterFolders(
+      List<VirtualFolder> folders, Set<int> matchingIds) async {
+    if (folders.isEmpty) return [];
+    final matchingPaths =
+        matchingIds.isEmpty ? <String>[] : await _imageDao.pathsByIds(matchingIds);
+
+    // 简单筛选时，文件夹自身持有的标签也参与匹配（高级表达式仅按图片递归判断）
+    Map<int, List<Tag>> folderTags = {};
+    if (!hasAdvancedFilter && _tagFilter.active) {
+      folderTags =
+          await _tagDao.getTagsForFolders(folders.map((f) => f.id!).toList());
     }
-    var list = await _imageDao.queryDirectInDir(
-      folderPath,
-      limit: 100000,
-      search: _searchQuery.isEmpty ? null : _searchQuery,
-    );
-    if (hasAdvancedFilter) {
-      final ids =
-          await _tagDao.getImageIdsByExpression(_advancedFilter, _allTags);
-      list = list.where((i) => ids.contains(i.id)).toList();
-    } else if (_tagFilter.active) {
-      final ids = await _tagDao.getImageIdsByTags(
-        andTagIds: _tagFilter.andTagIds,
-        orTagIds: _tagFilter.orTagIds,
-        notTagIds: _tagFilter.notTagIds,
-      );
-      list = list.where((i) => ids.contains(i.id)).toList();
+
+    final result = <VirtualFolder>[];
+    for (final f in folders) {
+      final paths = await _folderDao.getPaths(f.id!);
+      final containsImage = paths.any(
+          (p) => matchingPaths.any((mp) => _isUnderPath(mp, p.path)));
+      if (containsImage) {
+        result.add(f);
+        continue;
+      }
+      if (!hasAdvancedFilter && _tagFilter.active) {
+        final tags = folderTags[f.id] ?? const <Tag>[];
+        if (_folderTagsMatch(tags)) result.add(f);
+      }
     }
-    _images = list;
-    _totalCount = list.length;
-    logInfo('AppState',
-        'Folder images loaded: ${list.length} in "$folderPath"');
+    return result;
+  }
+
+  /// 文件夹直接持有的标签是否满足当前简单筛选（AND/OR/NOT 语义）
+  bool _folderTagsMatch(List<Tag> tags) {
+    final ids = tags.map((t) => t.id).whereType<int>().toSet();
+    if (_tagFilter.andTagIds.any((id) => !ids.contains(id))) return false;
+    if (_tagFilter.orTagIds.isNotEmpty &&
+        !_tagFilter.orTagIds.any((id) => ids.contains(id))) {
+      return false;
+    }
+    if (_tagFilter.notTagIds.any((id) => ids.contains(id))) return false;
+    return true;
+  }
+
+  bool _isUnderPath(String path, String dir) {
+    final a = path.toLowerCase();
+    var b = dir.toLowerCase();
+    if (b.endsWith('\\') || b.endsWith('/')) {
+      b = b.substring(0, b.length - 1);
+    }
+    if (a == b) return false;
+    return a.startsWith('$b\\') || a.startsWith('$b/');
+  }
+
+  List<VirtualFolder> _sortFolders(List<VirtualFolder> list) {
+    list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return list;
+  }
+
+  List<ImageItem> _sortImagesList(List<ImageItem> list) {
+    final dir = _sortDescending ? -1 : 1;
+    list.sort((a, b) {
+      int cmp;
+      switch (_sortKey) {
+        case 'filename':
+          cmp = a.filename.toLowerCase().compareTo(b.filename.toLowerCase());
+          break;
+        case 'alias':
+          cmp = (a.alias ?? '')
+              .toLowerCase()
+              .compareTo((b.alias ?? '').toLowerCase());
+          break;
+        case 'file_size':
+          cmp = (a.fileSize ?? 0).compareTo(b.fileSize ?? 0);
+          break;
+        case 'file_mtime':
+          cmp = (a.fileMtime ?? 0).compareTo(b.fileMtime ?? 0);
+          break;
+        default:
+          cmp = a.addedAt.compareTo(b.addedAt);
+          break;
+      }
+      if (cmp == 0) {
+        cmp = a.filename.toLowerCase().compareTo(b.filename.toLowerCase());
+      }
+      return cmp * dir;
+    });
+    return list;
   }
 
   void setSearchQuery(String q) {
@@ -283,9 +351,52 @@ class AppState extends ChangeNotifier {
     refresh();
   }
 
+  /// 单选（普通点击）
   void selectImage(int? id) {
     logDebug('AppState', 'selectImage id=$id');
     _selectedId = id;
+    _selectedIds
+      ..clear()
+      ..addAll({if (id != null) id});
+    _anchorId = id;
+    notifyListeners();
+  }
+
+  /// 切换多选（Ctrl+点击）
+  void toggleSelect(int id) {
+    if (_selectedIds.contains(id)) {
+      _selectedIds.remove(id);
+    } else {
+      _selectedIds.add(id);
+    }
+    _selectedId = id;
+    _anchorId = id;
+    notifyListeners();
+  }
+
+  /// 区间多选（Shift+点击，按当前列表顺序从锚点到目标）
+  void rangeSelect(int id) {
+    final list = _images;
+    final anchorIdx =
+        _anchorId == null ? -1 : list.indexWhere((i) => i.id == _anchorId);
+    final curIdx = list.indexWhere((i) => i.id == id);
+    if (anchorIdx < 0 || curIdx < 0) {
+      toggleSelect(id);
+      return;
+    }
+    final lo = anchorIdx < curIdx ? anchorIdx : curIdx;
+    final hi = anchorIdx < curIdx ? curIdx : anchorIdx;
+    for (final img in list.sublist(lo, hi + 1)) {
+      if (img.id != null) _selectedIds.add(img.id!);
+    }
+    _selectedId = id;
+    notifyListeners();
+  }
+
+  void clearSelection() {
+    _selectedId = null;
+    _selectedIds.clear();
+    _anchorId = null;
     notifyListeners();
   }
 
@@ -419,6 +530,7 @@ class AppState extends ChangeNotifier {
     _advancedFilter = expr;
     _tagFilter = const TagFilter();
     logInfo('AppState', 'Advanced filter set: "$expr"');
+    await SettingsService.instance.addExpression(expr); // 记录到历史缓存
     await refresh();
   }
 
@@ -434,14 +546,17 @@ class AppState extends ChangeNotifier {
 
   // ═══════════════ 设置操作 ═══════════════
 
-  /// 从 SharedPreferences 加载已保存的设置（初始化时调用）
+  /// 从设置服务加载已保存的设置（初始化时调用）
   Future<void> loadSettings() async {
     final ss = SettingsService.instance;
     _themeMode = ss.themeMode;
     _gridColumns = ss.gridColumns;
     _cacheSizeMB = ss.cacheSizeMB;
+    _sortKey = ss.sortKey;
+    _sortDescending = ss.sortDescending;
+    _viewMode = ss.viewMode;
     logInfo('AppState',
-        'Settings loaded: theme=${_themeMode.name}, grid=$_gridColumns, cache=${_cacheSizeMB}MB');
+        'Settings loaded: theme=${_themeMode.name}, grid=$_gridColumns, cache=${_cacheSizeMB}MB, sort=$_sortKey/$_sortDescending, view=$_viewMode');
     notifyListeners();
   }
 
@@ -463,6 +578,181 @@ class AppState extends ChangeNotifier {
     await SettingsService.instance.setCacheSizeMB(_cacheSizeMB);
     notifyListeners();
   }
+
+  // ── 排序 / 视图 ──
+
+  Future<void> setSortKey(String key) async {
+    _sortKey = key;
+    notifyListeners(); // 先刷新 UI，持久化失败也不影响排序生效
+    await SettingsService.instance.setSortKey(key);
+    await refresh();
+  }
+
+  Future<void> setSortDescending(bool desc) async {
+    _sortDescending = desc;
+    notifyListeners();
+    await SettingsService.instance.setSortDescending(desc);
+    await refresh();
+  }
+
+  Future<void> setViewMode(String mode) async {
+    _viewMode = mode == 'list' ? 'list' : 'grid';
+    notifyListeners();
+    await SettingsService.instance.setViewMode(_viewMode);
+  }
+
+  // ═══════════════ 图片别名 ═══════════════
+
+  /// 设置/清除图片别名
+  Future<void> setImageAlias(int id, String? alias) async {
+    await _imageDao.setAlias(id, alias);
+    final updated = await _imageDao.getById(id);
+    if (updated != null) {
+      _images = _images.map((i) => i.id == id ? updated : i).toList();
+    }
+    notifyListeners();
+  }
+
+  // ═══════════════ 批量标签 ═══════════════
+
+  /// 为一批图片添加标签（幂等）
+  Future<void> addTagsToImages(Iterable<int> imageIds, List<Tag> tags) async {
+    for (final id in imageIds) {
+      for (final tag in tags) {
+        await _tagDao.addTagToImage(id, tag.id!);
+      }
+    }
+    _imageTags.clear();
+    notifyListeners();
+  }
+
+  /// 从一批图片移除标签
+  Future<void> removeTagsFromImages(
+      Iterable<int> imageIds, List<Tag> tags) async {
+    for (final id in imageIds) {
+      for (final tag in tags) {
+        await _tagDao.removeTagFromImage(id, tag.id!);
+      }
+    }
+    _imageTags.clear();
+    notifyListeners();
+  }
+
+  /// 返回这批图片上已绑定的标签 id 集合（用于「移除标签」时过滤可选项）
+  Future<Set<int>> getTagIdsOnImages(Iterable<int> imageIds) async {
+    final ids = imageIds.toList();
+    if (ids.isEmpty) return {};
+    final map = await _tagDao.getTagsForImages(ids);
+    final result = <int>{};
+    for (final tags in map.values) {
+      for (final t in tags) {
+        if (t.id != null) result.add(t.id!);
+      }
+    }
+    return result;
+  }
+
+  // ═══════════════ 文件夹标签 ═══════════════
+
+  Future<List<Tag>> getFolderTags(int folderId) =>
+      _tagDao.getTagsForFolder(folderId);
+
+  /// 为文件夹添加标签；[recursive] 为真时递归同步到其所有图片及子文件夹图片。
+  Future<void> addTagsToFolder(int folderId, List<Tag> tags,
+      {bool recursive = false}) async {
+    for (final tag in tags) {
+      await _tagDao.addTagToFolder(folderId, tag.id!);
+    }
+    if (recursive) {
+      final imageIds = await _collectFolderImageIds(folderId);
+      await addTagsToImages(imageIds, tags);
+    }
+    _folderVersion++;
+    notifyListeners();
+  }
+
+  /// 从文件夹移除标签；[recursive] 为真时递归同步移除到所有子文件夹与子图片。
+  Future<void> removeTagsFromFolder(int folderId, List<Tag> tags,
+      {bool recursive = false}) async {
+    if (recursive) {
+      final folderIds = await _collectDescendantFolderIds(folderId);
+      for (final fid in folderIds) {
+        for (final tag in tags) {
+          await _tagDao.removeTagFromFolder(fid, tag.id!);
+        }
+      }
+      final imageIds = await _collectFolderImageIds(folderId);
+      await removeTagsFromImages(imageIds, tags);
+    } else {
+      for (final tag in tags) {
+        await _tagDao.removeTagFromFolder(folderId, tag.id!);
+      }
+    }
+    _folderVersion++;
+    notifyListeners();
+  }
+
+  /// 收集文件夹及其所有子文件夹下的图片 id（按路径前缀）
+  Future<Set<int>> _collectFolderImageIds(int folderId) async {
+    final paths = <String>[];
+    final queue = <int>[folderId];
+    while (queue.isNotEmpty) {
+      final fid = queue.removeAt(0);
+      for (final fp in await _folderDao.getPaths(fid)) {
+        paths.add(fp.path);
+      }
+      for (final c in await _folderDao.listChildren(fid)) {
+        if (c.id != null) queue.add(c.id!);
+      }
+    }
+    if (paths.isEmpty) return {};
+    final images = await _imageDao.queryByDirs(paths);
+    return images.map((i) => i.id).whereType<int>().toSet();
+  }
+
+  /// 收集文件夹及其所有后代文件夹的 id（用于递归移除文件夹标签）
+  Future<Set<int>> _collectDescendantFolderIds(int folderId) async {
+    final result = <int>{folderId};
+    final queue = <int>[folderId];
+    while (queue.isNotEmpty) {
+      final fid = queue.removeAt(0);
+      for (final c in await _folderDao.listChildren(fid)) {
+        if (c.id != null && result.add(c.id!)) {
+          queue.add(c.id!);
+        }
+      }
+    }
+    return result;
+  }
+
+  // ═══════════════ 数据目录迁移 ═══════════════
+
+  Future<String> getDataDir() => DataDirService.instance.dataDir;
+
+  /// 迁移数据目录到 [newDir]，随后重开数据库/缩略图并刷新。
+  Future<void> migrateDataDir(String newDir) async {
+    // 先关闭数据库，确保 WAL 合并后 pv2.db 完整一致
+    await DatabaseManager.instance.close();
+    await DataDirService.instance.migrateTo(newDir);
+    await DatabaseManager.instance.init();
+    await ThumbnailService.instance.init();
+    await loadSettings();
+    await loadTags();
+    await loadFolders();
+    await refresh();
+  }
+
+  // ═══════════════ 表达式历史缓存 ═══════════════
+
+  List<String> get expressionHistory =>
+      SettingsService.instance.expressionHistory;
+  int get maxExprCacheCount => SettingsService.instance.maxExprCacheCount;
+
+  Future<void> setMaxExprCacheCount(int count) =>
+      SettingsService.instance.setMaxExprCacheCount(count);
+
+  Future<void> clearExpressionHistory() =>
+      SettingsService.instance.clearExpressionHistory();
 
   // ═══════════════ 导出 / 分享 ═══════════════
 
@@ -608,6 +898,7 @@ class AppState extends ChangeNotifier {
   Future<void> _reloadFolderTree() async {
     _folderVersion++;
     await loadFolders();
+    await refresh(); // 同步刷新中间栏，反映文件夹增删改
   }
 
   Future<void> importDirectory(String dirPath) async {

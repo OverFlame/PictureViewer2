@@ -1,8 +1,6 @@
-import 'dart:io';
-
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import '../services/data_dir_service.dart';
 import '../utils/log_util.dart';
 import 'tables.dart';
 
@@ -68,11 +66,8 @@ class DatabaseManager {
   }
 
   Future<String> _dbDir() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    final dir = p.join(appDir.path, 'PictureViewer');
-    // 确保目录存在（path_provider 不一定自动创建子目录）
-    await Directory(dir).create(recursive: true);
-    return dir;
+    // 数据库随数据目录走（可迁移）
+    return DataDirService.instance.dataDir;
   }
 
   /// 关闭数据库

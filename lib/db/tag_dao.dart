@@ -313,13 +313,71 @@ class TagDao {
     return map;
   }
 
+  // ═══ 文件夹标签关联 ═══
+
+  /// 为文件夹添加标签（幂等）
+  Future<void> addTagToFolder(int folderId, int tagId) async {
+    await _db.insert('folder_tags', {'folder_id': folderId, 'tag_id': tagId},
+        conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+
+  /// 移除文件夹的某个标签
+  Future<void> removeTagFromFolder(int folderId, int tagId) async {
+    await _db.delete('folder_tags',
+        where: 'folder_id = ? AND tag_id = ?',
+        whereArgs: [folderId, tagId]);
+  }
+
+  /// 批量设置文件夹标签（先删后插，事务包裹）
+  Future<void> setFolderTags(int folderId, List<int> tagIds) async {
+    await _db.transaction((txn) async {
+      await txn.delete('folder_tags',
+          where: 'folder_id = ?', whereArgs: [folderId]);
+      for (final tagId in tagIds) {
+        await txn.insert('folder_tags',
+            {'folder_id': folderId, 'tag_id': tagId});
+      }
+    });
+  }
+
+  /// 获取某文件夹的所有标签
+  Future<List<Tag>> getTagsForFolder(int folderId) async {
+    final rows = await _db.rawQuery('''
+      SELECT t.* FROM tags t
+      INNER JOIN folder_tags ft ON t.id = ft.tag_id
+      WHERE ft.folder_id = ?
+      ORDER BY t.namespace, t.name
+    ''', [folderId]);
+    return rows.map(Tag.fromMap).toList();
+  }
+
+  /// 批量获取文件夹的标签（减少 N+1）
+  Future<Map<int, List<Tag>>> getTagsForFolders(List<int> folderIds) async {
+    if (folderIds.isEmpty) return {};
+    final placeholders = folderIds.map((_) => '?').join(',');
+    final rows = await _db.rawQuery('''
+      SELECT ft.folder_id, t.*
+      FROM folder_tags ft
+      INNER JOIN tags t ON t.id = ft.tag_id
+      WHERE ft.folder_id IN ($placeholders)
+      ORDER BY t.namespace, t.name
+    ''', folderIds);
+    final map = <int, List<Tag>>{};
+    for (final row in rows) {
+      final fid = row['folder_id'] as int;
+      map.putIfAbsent(fid, () => []).add(Tag.fromMap(row));
+    }
+    return map;
+  }
+
   // ═══ 清理 ═══
 
-  /// 删除无图片引用的孤立标签
+  /// 删除无图片/文件夹引用的孤立标签
   Future<int> deleteOrphanTags() async {
     final count = await _db.delete('tags',
         where: '''
       id NOT IN (SELECT DISTINCT tag_id FROM image_tags)
+      AND id NOT IN (SELECT DISTINCT tag_id FROM folder_tags)
     ''');
     logInfo('TagDao', 'deleteOrphanTags: removed $count orphan(s)');
     return count;
