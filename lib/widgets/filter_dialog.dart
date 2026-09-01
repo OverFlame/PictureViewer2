@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../db/tag_dao.dart';
 import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
+import '../utils/color_util.dart';
 import '../utils/filter_expression.dart';
 
 /// 高级筛选表达式对话框
@@ -233,12 +234,6 @@ class _AdvancedFilterDialogState extends State<AdvancedFilterDialog> {
     );
   }
 
-  Color _parseColor(String hex) {
-    try {
-      final h = hex.replaceFirst('#', '');
-      return Color(int.parse(h, radix: 16) | 0xFF000000);
-    } catch (_) {
-      return Catppuccin.mauve;
-    }
-  }
+  Color _parseColor(String hex) =>
+      parseHexColor(hex, fallback: Catppuccin.mauve);
 }

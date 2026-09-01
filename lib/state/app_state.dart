@@ -463,6 +463,34 @@ class AppState extends ChangeNotifier {
     await loadTags();
   }
 
+  /// 更新标签（改名 / 改颜色 / 改命名空间）。
+  /// 返回 null 表示成功，否则返回错误信息字符串。
+  Future<String?> updateTag(Tag tag) async {
+    if (tag.id == null) return '标签 id 缺失';
+    final name = tag.name.trim();
+    if (name.isEmpty) return '标签名不能为空';
+    final ns = tag.namespace.isEmpty ? 'general' : tag.namespace;
+
+    // 同命名空间下重名校验（排除自身）
+    final existing = await _tagDao.getByFullName(ns, name);
+    if (existing != null && existing.id != tag.id) {
+      return '该命名空间下已存在同名标签「$name」';
+    }
+
+    await _tagDao.update(Tag(
+      id: tag.id,
+      namespace: ns,
+      name: name,
+      color: tag.color,
+    ));
+    _imageTags.clear(); // 颜色 / 名称可能变化，清除图片标签缓存
+    logInfo('AppState',
+        'Updated tag #${tag.id}: "${tag.name}" -> "$name" (ns=$ns, color=${tag.color})');
+    await loadTags();
+    notifyListeners();
+    return null;
+  }
+
   void _removeFromFilter(int tagId) {
     _tagFilter = TagFilter(
       andTagIds: _tagFilter.andTagIds.where((id) => id != tagId).toList(),
