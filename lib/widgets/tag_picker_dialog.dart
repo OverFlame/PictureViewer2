@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../db/tag_dao.dart';
 import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
+import '../utils/color_util.dart';
 
 /// 打开多选标签对话框；返回选中的标签列表（null 表示取消）。
 ///
@@ -127,12 +128,6 @@ class _TagPickerDialogState extends State<_TagPickerDialog> {
     );
   }
 
-  Color _parseColor(String hex) {
-    try {
-      final h = hex.replaceFirst('#', '');
-      return Color(int.parse(h, radix: 16) | 0xFF000000);
-    } catch (_) {
-      return Catppuccin.mauve;
-    }
-  }
+  Color _parseColor(String hex) =>
+      parseHexColor(hex, fallback: Catppuccin.mauve);
 }

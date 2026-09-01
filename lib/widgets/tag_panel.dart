@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../db/tag_dao.dart';
 import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
+import '../utils/color_util.dart';
+import 'color_picker_dialog.dart';
 
 /// 左侧标签面板 —— 命名空间分组 + 搜索 + CRUD
 class TagPanel extends StatefulWidget {
@@ -331,6 +333,9 @@ class _TagPanelState extends State<TagPanel> {
             appState.toggleOrFilter(tag.id!);
             appState.toggleNotFilter(tag.id!);
             break;
+          case 'edit':
+            _showEditDialog(tag, appState);
+            break;
           case 'delete':
             _showDeleteDialog(tag, appState);
             break;
@@ -354,6 +359,10 @@ class _TagPanelState extends State<TagPanel> {
         if (andActive || orActive || notActive)
           const PopupMenuItem(value: 'clear', child: Text('清除此标签筛选', style: TextStyle(fontSize: 12))),
         const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: 'edit',
+          child: Text('编辑标签', style: TextStyle(fontSize: 12)),
+        ),
         PopupMenuItem(
           value: 'delete',
           child: const Text('删除标签', style: TextStyle(fontSize: 12, color: Catppuccin.red)),
@@ -445,6 +454,22 @@ class _TagPanelState extends State<TagPanel> {
                       );
                     }).toList(),
                   ),
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () async {
+                        final hex = await ColorPickerDialog.show(context,
+                            initialHex: color);
+                        if (hex != null) setLocal(() => color = hex);
+                      },
+                      icon: const Icon(Icons.colorize, size: 16),
+                      label:
+                          const Text('自定义颜色', style: TextStyle(fontSize: 12)),
+                      style: TextButton.styleFrom(
+                          foregroundColor: Catppuccin.mauve),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -468,6 +493,13 @@ class _TagPanelState extends State<TagPanel> {
           );
         });
       },
+    );
+  }
+
+  void _showEditDialog(Tag tag, AppState appState) {
+    showDialog(
+      context: context,
+      builder: (_) => _TagEditDialog(tag: tag),
     );
   }
 
@@ -498,13 +530,142 @@ class _TagPanelState extends State<TagPanel> {
     );
   }
 
-  Color _parseColor(String hex) {
-    try {
-      final h = hex.replaceFirst('#', '');
-      final intVal = int.parse(h, radix: 16);
-      return Color(intVal | 0xFF000000);
-    } catch (_) {
-      return Catppuccin.mauve;
+  Color _parseColor(String hex) =>
+      parseHexColor(hex, fallback: Catppuccin.mauve);
+}
+
+/// 标签编辑对话框（改名 / 改命名空间 / 改颜色）
+class _TagEditDialog extends StatefulWidget {
+  final Tag tag;
+  const _TagEditDialog({required this.tag});
+
+  @override
+  State<_TagEditDialog> createState() => _TagEditDialogState();
+}
+
+class _TagEditDialogState extends State<_TagEditDialog> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _nsCtrl;
+  late String _color;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.tag.name);
+    _nsCtrl = TextEditingController(
+        text: widget.tag.namespace == 'general' ? '' : widget.tag.namespace);
+    _color = widget.tag.color;
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _nsCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final appState = context.read<AppState>();
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
+      setState(() => _error = '标签名不能为空');
+      return;
     }
+    final result = await appState.updateTag(Tag(
+      id: widget.tag.id,
+      namespace: _nsCtrl.text.trim(),
+      name: name,
+      color: _color,
+    ));
+    if (!mounted) return;
+    if (result != null) {
+      setState(() => _error = result);
+      return;
+    }
+    Navigator.pop(context);
+  }
+
+  Future<void> _pickColor() async {
+    final hex = await ColorPickerDialog.show(context, initialHex: _color);
+    if (hex != null && mounted) {
+      setState(() => _color = hex);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = parseHexColor(_color);
+    return AlertDialog(
+      backgroundColor: Catppuccin.mantle,
+      title: const Text('编辑标签', style: TextStyle(color: Catppuccin.text)),
+      content: SizedBox(
+        width: 300,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _nameCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: '标签名'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _nsCtrl,
+              decoration: const InputDecoration(
+                labelText: '命名空间 (可选)',
+                hintText: '留空为 general',
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Text('颜色',
+                    style:
+                        TextStyle(fontSize: 12, color: Catppuccin.subtext1)),
+                const SizedBox(width: 12),
+                GestureDetector(
+                  onTap: _pickColor,
+                  child: Container(
+                    width: 36,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Catppuccin.surface1),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _color,
+                    style: const TextStyle(
+                        fontSize: 11,
+                        fontFamily: 'monospace',
+                        color: Catppuccin.overlay1),
+                  ),
+                ),
+              ],
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!,
+                  style: const TextStyle(fontSize: 12, color: Catppuccin.red)),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消', style: TextStyle(color: Catppuccin.overlay1)),
+        ),
+        FilledButton(
+          onPressed: _save,
+          child: const Text('保存'),
+        ),
+      ],
+    );
   }
 }

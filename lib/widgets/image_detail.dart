@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../services/exif_service.dart';
 import '../services/thumbnail_cache.dart';
 import '../theme/catppuccin.dart';
+import '../utils/color_util.dart';
 import '../utils/log_util.dart';
 import 'export_actions.dart';
 
@@ -786,12 +787,6 @@ class _TagEditorState extends State<_TagEditor> {
     );
   }
 
-  Color _tagColor(String hex) {
-    try {
-      final h = hex.replaceFirst('#', '');
-      return Color(int.parse(h, radix: 16) | 0xFF000000);
-    } catch (_) {
-      return Catppuccin.mauve;
-    }
-  }
+  Color _tagColor(String hex) =>
+      parseHexColor(hex, fallback: Catppuccin.mauve);
 }
