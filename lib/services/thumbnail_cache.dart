@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -36,6 +37,13 @@ class ThumbnailMemoryCache {
     }
     _map.clear();
   }
+
+  /// 按条件移除（原图内容变化或删除时用），移除时释放 GPU 纹理
+  void removeWhere(bool Function(String key) test) {
+    for (final key in _map.keys.where(test).toList()) {
+      _map.remove(key)?.dispose();
+    }
+  }
 }
 
 /// 缩略图服务 — 三层缓存（内存 LRU → 磁盘 → 原图生成）
@@ -54,19 +62,47 @@ class ThumbnailService {
   /// 缓存根目录路径
   String get cacheDir => _cacheDir;
 
-  Future<void> init() async {
+  /// [cacheDir] 只给测试用：跳过 DataDirService 直接指定缓存根目录
+  Future<void> init({String? cacheDir}) async {
     // 缩略图随数据目录走（可迁移）
-    _cacheDir = p.join(await DataDirService.instance.dataDir, 'thumbnails');
+    _cacheDir =
+        cacheDir ?? p.join(await DataDirService.instance.dataDir, 'thumbnails');
     await Directory(_cacheDir).create(recursive: true);
     logInfo('Thumbnail', 'Cache dir: $_cacheDir');
   }
 
-  /// 获取缩略图路径（不生成，仅返回路径）
-  String thumbPath(String originalPath, {int size = 300}) {
-    final hash = sha256.convert(originalPath.codeUnits).toString();
+  /// 获取缩略图路径（不生成，仅返回路径）。
+  ///
+  /// 文件名里带源文件的 mtime：源文件内容一变，缩略图就落到新的文件名上，
+  /// 旧缩略图不会被命中。不带 mtime 的话，同一个路径换了内容仍会读到旧缩略图，
+  /// 而 [Image.file] 的缓存键只有路径，界面也就跟着一直显示旧图。
+  ///
+  /// [mtimeMs] 只给「调用方已经 stat 过」的场景用，缺省时自己 stat。
+  String thumbPath(String originalPath, {int size = 300, int? mtimeMs}) {
+    final stamp = mtimeMs ?? _mtimeMs(originalPath);
+    final hash = _hashKey(originalPath);
     final subDir = hash.substring(0, 2);
-    return p.join(_cacheDir, subDir, '$hash.t$size');
+    return p.join(_cacheDir, subDir, '$hash.$stamp.t$size');
   }
+
+  /// 原图路径的哈希（不含 mtime，用于按前缀清理）
+  ///
+  /// 用 utf8 编码而不是 `codeUnits`：`codeUnits` 是 UTF-16 码元，值可以超过
+  /// 255，塞进 typed_data 时高位被截掉，只在码元高位上不同的两条路径会算出
+  /// 同一个文件名，表现为缩略图串图。
+  String _hashKey(String originalPath) =>
+      sha256.convert(utf8.encode(originalPath)).toString();
+
+  /// 源文件的 mtime（毫秒）；文件不存在返回 0
+  int _mtimeMs(String originalPath) {
+    final f = File(originalPath);
+    if (!f.existsSync()) return 0;
+    return f.statSync().modified.millisecondsSinceEpoch;
+  }
+
+  /// 缩略图缓存目录下，该原图所属的子目录
+  Directory _subDirOf(String originalPath) =>
+      Directory(p.join(_cacheDir, _hashKey(originalPath).substring(0, 2)));
 
   /// 确保磁盘缓存目录存在
   Future<void> _ensureSubDir(String subDir) async {
@@ -107,19 +143,46 @@ class ThumbnailService {
       throw Exception('Failed to encode thumbnail for $originalPath');
     }
 
-    final hash = sha256.convert(originalPath.codeUnits).toString();
+    final hash = _hashKey(originalPath);
     final subDir = hash.substring(0, 2);
     await _ensureSubDir(subDir);
     await File(targetPath).writeAsBytes(byteData.buffer.asUint8List());
 
     image.dispose();
+    // 清掉同一原图同一尺寸的旧时间戳版本，否则每换一次内容就留一份孤儿
+    await _removeOtherVariants(hash, size, keepName: p.basename(targetPath));
     logDebug('Thumbnail', 'Saved: ${p.basename(targetPath)}');
     return targetPath;
   }
 
+  /// 删除 [_subDirOf] 里同一原图、同一尺寸、非 [keepName] 的历史缩略图
+  Future<void> _removeOtherVariants(String hash, int size,
+      {required String keepName}) async {
+    final dir = Directory(p.join(_cacheDir, hash.substring(0, 2)));
+    if (!dir.existsSync()) return;
+    final suffix = '.t$size';
+    // 先收名字再删，避免边遍历目录流边删文件
+    final victims = <File>[];
+    await for (final entity in dir.list()) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      if (name == keepName || !name.startsWith('$hash.')) continue;
+      if (!name.endsWith(suffix)) continue;
+      victims.add(entity);
+    }
+    for (final file in victims) {
+      try {
+        await file.delete();
+      } catch (e) {
+        logDebug('Thumbnail', 'Old thumbnail not removed: ${file.path} ($e)');
+      }
+    }
+  }
+
   /// 解码缩略图为 ui.Image 并放入内存缓存
   Future<ui.Image> loadThumbnail(String originalPath, {int size = 300}) async {
-    final cacheKey = '$originalPath::$size';
+    // 内存键也要带 mtime，不然原图换了内容还是拿到旧的 ui.Image
+    final cacheKey = '$originalPath::$size::${_mtimeMs(originalPath)}';
 
     // L1: 内存
     final cached = _memoryCache.get(cacheKey);
@@ -137,18 +200,26 @@ class ThumbnailService {
   }
 
   /// 删除原图对应的所有缩略图缓存
+  ///
+  /// 文件名带 mtime，删的时候算不出当时的时间戳，所以按哈希前缀扫子目录。
+  /// 原图已经删掉的情况也走这条路（那种情况下 stat 不出 mtime）。
   Future<void> deleteThumbnails(String originalPath) async {
-    for (final size in [300, 800]) {
-      final targetPath = thumbPath(originalPath, size: size);
-      final file = File(targetPath);
-      if (file.existsSync()) {
+    final hash = _hashKey(originalPath);
+    final dir = _subDirOf(originalPath);
+    if (dir.existsSync()) {
+      // 先收名字再删，避免边遍历目录流边删文件
+      final victims = <File>[];
+      await for (final entity in dir.list()) {
+        if (entity is File && p.basename(entity.path).startsWith('$hash.')) {
+          victims.add(entity);
+        }
+      }
+      for (final file in victims) {
         await file.delete();
       }
     }
-    // 同时清理内存缓存
-    for (final size in [300, 800]) {
-      _memoryCache.get('$originalPath::$size')?.dispose();
-    }
+    // 同时清理内存缓存（键里带 mtime，只能按前缀删）
+    _memoryCache.removeWhere((key) => key.startsWith('$originalPath::'));
   }
 
   /// 磁盘缓存按 LRU 淘汰（超出上限时清理最旧文件）

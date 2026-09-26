@@ -771,10 +771,15 @@ class _TagEditorState extends State<_TagEditor> {
                             fontSize: 12, color: Catppuccin.mauve),
                       ),
                       onTap: () async {
-                        final tag = await appState.createTag(
+                        final messenger = ScaffoldMessenger.of(ctx);
+                        final created = await appState.createTag(
                             searchCtrl.text.trim());
-                        appState.toggleTagOnImage(widget.imageId, tag);
+                        appState.toggleTagOnImage(widget.imageId, created.tag);
                         if (mounted) Navigator.pop(ctx);
+                        if (!created.created) {
+                          messenger.showSnackBar(const SnackBar(
+                              content: Text('已存在同名标签，直接使用了它')));
+                        }
                         _loadTags();
                       },
                     ),

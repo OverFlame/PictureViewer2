@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -245,13 +247,47 @@ class _HomePageState extends State<HomePage> {
 }
 
 /// 顶部工具栏
-class _TopToolbar extends StatelessWidget {
+class _TopToolbar extends StatefulWidget {
   const _TopToolbar();
+
+  @override
+  State<_TopToolbar> createState() => _TopToolbarState();
+}
+
+class _TopToolbarState extends State<_TopToolbar> {
+  /// 搜索防抖时长。每敲一个键直接 refresh 会把列表刷成中间态，
+  /// 而搜索词只有这一个输入框会改，攒一下再发足够快。
+  static const _searchDebounce = Duration(milliseconds: 250);
+
+  late final TextEditingController _ctrl;
+
+  /// 输入过程中不能重建 controller，否则光标会被挪到末尾
+  Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: context.read<AppState>().searchQuery);
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(_searchDebounce, () {
+      if (!mounted) return;
+      context.read<AppState>().setSearchQuery(_ctrl.text);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final appState = context.watch<AppState>();
-    final ctrl = TextEditingController(text: appState.searchQuery);
 
     return Container(
       height: 44,
@@ -261,8 +297,8 @@ class _TopToolbar extends StatelessWidget {
         children: [
           Expanded(
             child: TextField(
-              controller: ctrl,
-              onChanged: (v) => appState.setSearchQuery(v),
+              controller: _ctrl,
+              onChanged: _onSearchChanged,
               decoration: const InputDecoration(
                 hintText: '搜索文件名...',
                 prefixIcon: Icon(Icons.search, size: 18),

@@ -8,6 +8,7 @@ import '../db/image_dao.dart';
 import '../services/exif_service.dart';
 import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
+import '../utils/image_cache_util.dart';
 import '../utils/log_util.dart';
 
 /// =============================================================
@@ -79,6 +80,10 @@ class _ImageViewerState extends State<ImageViewer> {
     _isFitToWindow = true;
     _isImageLoading = true;
     _displayedImageId = id;
+
+    // 文件内容被外部替换过就丢掉解码缓存。FileImage 的缓存键只有
+    // path + scale，不驱逐的话原地显示的还是旧图。
+    ImageCacheGuard.evictIfChanged(img.path);
 
     _loadExifForCurrent();
     _preloadAdjacent();

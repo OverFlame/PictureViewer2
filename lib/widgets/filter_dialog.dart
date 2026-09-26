@@ -44,7 +44,12 @@ class _AdvancedFilterDialogState extends State<AdvancedFilterDialog> {
       await appState.setAdvancedFilter(_ctrl.text);
       if (mounted) Navigator.pop(context);
     } on FilterExpressionException catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
+    } catch (e) {
+      // 兜底：解析器已经给递归深度设了上限，但不排除还有别的 Error。
+      // 只 catch 语法异常的话，任何漏网的错误都会穿过这里逃到框架层，
+      // 对话框留在屏幕上还不给提示。
+      if (mounted) setState(() => _error = '表达式无法处理：$e');
     }
   }
 

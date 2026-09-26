@@ -5,6 +5,7 @@ import '../db/tag_dao.dart';
 import '../state/app_state.dart';
 import '../theme/catppuccin.dart';
 import '../utils/color_util.dart';
+import '../utils/log_util.dart';
 import 'color_picker_dialog.dart';
 
 /// 左侧标签面板 —— 命名空间分组 + 搜索 + CRUD
@@ -397,103 +398,9 @@ class _TagPanelState extends State<TagPanel> {
 
   // ── 创建对话框 ──
   void _showCreateDialog(AppState appState) {
-    final nameCtrl = TextEditingController();
-    final nsCtrl = TextEditingController();
-    String color = '#cba6f7';
-    final presetColors = [
-      '#cba6f7', '#f38ba8', '#fab387', '#f9e2af',
-      '#a6e3a1', '#94e2d5', '#89dceb', '#b4befe',
-    ];
-
     showDialog(
       context: context,
-      builder: (ctx) {
-        return StatefulBuilder(builder: (ctx, setLocal) {
-          return AlertDialog(
-            backgroundColor: Catppuccin.mantle,
-            title: const Text('新建标签', style: TextStyle(color: Catppuccin.text)),
-            content: SizedBox(
-              width: 300,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: nameCtrl,
-                    autofocus: true,
-                    decoration: const InputDecoration(
-                      labelText: '标签名',
-                      hintText: '例如：风景',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: nsCtrl,
-                    decoration: const InputDecoration(
-                      labelText: '命名空间 (可选)',
-                      hintText: '例如：地点',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: presetColors.map((c) {
-                      final selected = color == c;
-                      return GestureDetector(
-                        onTap: () => setLocal(() => color = c),
-                        child: Container(
-                          width: 24,
-                          height: 24,
-                          decoration: BoxDecoration(
-                            color: _parseColor(c),
-                            shape: BoxShape.circle,
-                            border: selected
-                                ? Border.all(color: Catppuccin.text, width: 2)
-                                : null,
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 4),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: () async {
-                        final hex = await ColorPickerDialog.show(context,
-                            initialHex: color);
-                        if (hex != null) setLocal(() => color = hex);
-                      },
-                      icon: const Icon(Icons.colorize, size: 16),
-                      label:
-                          const Text('自定义颜色', style: TextStyle(fontSize: 12)),
-                      style: TextButton.styleFrom(
-                          foregroundColor: Catppuccin.mauve),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('取消', style: TextStyle(color: Catppuccin.overlay1)),
-              ),
-              TextButton(
-                onPressed: () {
-                  final name = nameCtrl.text.trim();
-                  if (name.isNotEmpty) {
-                    appState.createTag(name,
-                        namespace: nsCtrl.text.trim(), color: color);
-                    Navigator.pop(ctx);
-                  }
-                },
-                child: const Text('创建', style: TextStyle(color: Catppuccin.mauve)),
-              ),
-            ],
-          );
-        });
-      },
+      builder: (_) => const _TagCreateDialog(),
     );
   }
 
@@ -507,32 +414,247 @@ class _TagPanelState extends State<TagPanel> {
   void _showDeleteDialog(Tag tag, AppState appState) {
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Catppuccin.mantle,
-        title: const Text('删除标签', style: TextStyle(color: Catppuccin.text)),
-        content: Text(
-          '确定删除「${tag.name}」？关联的图片标签也会被移除。',
-          style: const TextStyle(color: Catppuccin.subtext1),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消', style: TextStyle(color: Catppuccin.overlay1)),
-          ),
-          TextButton(
-            onPressed: () {
-              appState.deleteTag(tag.id!);
-              Navigator.pop(ctx);
-            },
-            child: const Text('删除', style: TextStyle(color: Catppuccin.red)),
-          ),
-        ],
-      ),
+      builder: (_) => _TagDeleteDialog(tag: tag),
     );
   }
 
   Color _parseColor(String hex) =>
       parseHexColor(hex, fallback: Catppuccin.mauve);
+}
+
+/// 新建标签对话框。
+///
+/// 原来这段是内联的 StatefulBuilder：controller 建在 build 里没人释放，
+/// 「创建」按钮把 createTag 的 Future 丢掉就关窗，写库失败也照样显示成功，
+/// 名字为空时按钮干脆没反应。
+class _TagCreateDialog extends StatefulWidget {
+  const _TagCreateDialog();
+
+  @override
+  State<_TagCreateDialog> createState() => _TagCreateDialogState();
+}
+
+class _TagCreateDialogState extends State<_TagCreateDialog> {
+  static const _presetColors = [
+    '#cba6f7', '#f38ba8', '#fab387', '#f9e2af',
+    '#a6e3a1', '#94e2d5', '#89dceb', '#b4befe',
+  ];
+
+  final _nameCtrl = TextEditingController();
+  final _nsCtrl = TextEditingController();
+  String _color = '#cba6f7';
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _nsCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _create() async {
+    final appState = context.read<AppState>();
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
+      setState(() => _error = '标签名不能为空');
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final created = await appState.createTag(name,
+          namespace: _nsCtrl.text.trim(), color: _color);
+      if (!mounted) return;
+      Navigator.pop(context);
+      if (!created.created) {
+        messenger.showSnackBar(
+            const SnackBar(content: Text('已存在同名标签，直接使用了它')));
+      }
+    } catch (e) {
+      logError('TagPanel', '创建标签失败', e);
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = '创建失败：$e';
+      });
+    }
+  }
+
+  Future<void> _pickColor() async {
+    final hex = await ColorPickerDialog.show(context, initialHex: _color);
+    if (hex != null && mounted) {
+      setState(() => _color = hex);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Catppuccin.mantle,
+      title: const Text('新建标签', style: TextStyle(color: Catppuccin.text)),
+      content: SizedBox(
+        width: 300,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _nameCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: '标签名',
+                hintText: '例如：风景',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _nsCtrl,
+              decoration: const InputDecoration(
+                labelText: '命名空间 (可选)',
+                hintText: '例如：地点',
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: _presetColors.map((c) {
+                final selected = _color == c;
+                return GestureDetector(
+                  onTap: () => setState(() => _color = c),
+                  child: Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color:
+                          parseHexColor(c, fallback: Catppuccin.mauve),
+                      shape: BoxShape.circle,
+                      border: selected
+                          ? Border.all(color: Catppuccin.text, width: 2)
+                          : null,
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _pickColor,
+                icon: const Icon(Icons.colorize, size: 16),
+                label: const Text('自定义颜色', style: TextStyle(fontSize: 12)),
+                style:
+                    TextButton.styleFrom(foregroundColor: Catppuccin.mauve),
+              ),
+            ),
+            if (_error != null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(_error!,
+                      style: const TextStyle(
+                          fontSize: 12, color: Catppuccin.red)),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消', style: TextStyle(color: Catppuccin.overlay1)),
+        ),
+        TextButton(
+          onPressed: _saving ? null : _create,
+          child: const Text('创建', style: TextStyle(color: Catppuccin.mauve)),
+        ),
+      ],
+    );
+  }
+}
+
+/// 删除标签确认框。
+///
+/// 原来是内联的 AlertDialog：onPressed 里把 deleteTag 的 Future 丢掉就立刻
+/// pop，删除失败（外键冲突、库被占用）用户看到的仍然是「删掉了」。
+class _TagDeleteDialog extends StatefulWidget {
+  final Tag tag;
+  const _TagDeleteDialog({required this.tag});
+
+  @override
+  State<_TagDeleteDialog> createState() => _TagDeleteDialogState();
+}
+
+class _TagDeleteDialogState extends State<_TagDeleteDialog> {
+  String? _error;
+  bool _deleting = false;
+
+  Future<void> _delete() async {
+    final appState = context.read<AppState>();
+    final id = widget.tag.id;
+    if (id == null) {
+      setState(() => _error = '这个标签没有 id，删不掉');
+      return;
+    }
+
+    setState(() {
+      _deleting = true;
+      _error = null;
+    });
+    try {
+      await appState.deleteTag(id);
+      if (!mounted) return;
+      Navigator.pop(context);
+    } catch (e) {
+      logError('TagPanel', '删除标签失败', e);
+      if (!mounted) return;
+      setState(() {
+        _deleting = false;
+        _error = '删除失败：$e';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Catppuccin.mantle,
+      title: const Text('删除标签', style: TextStyle(color: Catppuccin.text)),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '确定删除「${widget.tag.name}」？关联的图片标签也会被移除。',
+            style: const TextStyle(color: Catppuccin.subtext1),
+          ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(_error!,
+                  style:
+                      const TextStyle(fontSize: 12, color: Catppuccin.red)),
+            ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消', style: TextStyle(color: Catppuccin.overlay1)),
+        ),
+        TextButton(
+          onPressed: _deleting ? null : _delete,
+          child: const Text('删除', style: TextStyle(color: Catppuccin.red)),
+        ),
+      ],
+    );
+  }
 }
 
 /// 标签编辑对话框（改名 / 改命名空间 / 改颜色）

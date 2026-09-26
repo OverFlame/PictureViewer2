@@ -159,12 +159,32 @@ List<_Tok> _tokenize(String input) {
 // ═══════════════════ 语法分析 ═══════════════════
 
 class _Parser {
+  /// 递归嵌套上限。
+  ///
+  /// 表达式是用户直接输入的。没有上限时 `'(' * 5000` 这样的输入会抛
+  /// StackOverflowError，而它继承自 Error，filter_dialog 里的
+  /// `on FilterExpressionException` 接不住，会一路逃到框架层。
+  static const int maxDepth = 256;
+
   final List<_Tok> _ts;
   int _i = 0;
+  int _depth = 0;
 
   _Parser(this._ts);
 
   _Tok get _cur => _ts[_i];
+
+  /// 进入更深一层递归；超过上限按语法错误处理
+  T _deeper<T>(T Function() body) {
+    if (++_depth > maxDepth) {
+      throw FilterExpressionException('表达式嵌套过深（递归上限 $maxDepth 层）', _cur.pos);
+    }
+    try {
+      return body();
+    } finally {
+      _depth--;
+    }
+  }
 
   Expr parse() {
     final e = _parseOr();
@@ -198,36 +218,36 @@ class _Parser {
   }
 
   // not := '!' not | primary
-  Expr _parseNot() {
-    if (_cur.type == _T.not_) {
-      _i++;
-      return NotExpr(_parseNot());
-    }
-    return _parsePrimary();
-  }
+  Expr _parseNot() => _deeper(() {
+        if (_cur.type == _T.not_) {
+          _i++;
+          return NotExpr(_parseNot());
+        }
+        return _parsePrimary();
+      });
 
   // primary := '(' or ')' | ident
-  Expr _parsePrimary() {
-    final t = _cur;
-    if (t.type == _T.lparen) {
-      _i++;
-      final e = _parseOr();
-      if (_cur.type != _T.rparen) {
-        throw FilterExpressionException('缺少右括号「)」', _cur.pos);
-      }
-      _i++;
-      return e;
-    }
-    if (t.type == _T.ident) {
-      _i++;
-      return TagRef(t.text, quoted: t.quoted);
-    }
-    if (t.type == _T.eof) {
-      throw FilterExpressionException('表达式不完整', t.pos);
-    }
-    throw FilterExpressionException(
-        '此处需要标签名或「(」，却遇到「${_describe(t)}」', t.pos);
-  }
+  Expr _parsePrimary() => _deeper(() {
+        final t = _cur;
+        if (t.type == _T.lparen) {
+          _i++;
+          final e = _parseOr();
+          if (_cur.type != _T.rparen) {
+            throw FilterExpressionException('缺少右括号「)」', _cur.pos);
+          }
+          _i++;
+          return e;
+        }
+        if (t.type == _T.ident) {
+          _i++;
+          return TagRef(t.text, quoted: t.quoted);
+        }
+        if (t.type == _T.eof) {
+          throw FilterExpressionException('表达式不完整', t.pos);
+        }
+        throw FilterExpressionException(
+            '此处需要标签名或「(」，却遇到「${_describe(t)}」', t.pos);
+      });
 
   String _describe(_Tok t) => switch (t.type) {
         _T.lparen => '(',
@@ -246,19 +266,47 @@ class _Parser {
 ///
 /// [resolve] 负责把 [TagRef] 解析为 tag id 列表（空列表表示该原子恒假）。
 /// 用 SQLite 的 INTERSECT / UNION / EXCEPT 直接组合集合运算。
+///
+/// 这里用显式栈做后序遍历，不用递归。解析器的深度上限管的是括号嵌套，
+/// 管不了宽度：`a && a && a ...` 两万项写出来是一棵两万层深的左深树，
+/// 递归编译会跟着树深一起栈溢出。
 String buildImageIdSubquery(Expr ast, List<int> Function(TagRef ref) resolve) {
-  if (ast is TagRef) {
-    return _tagRefSql(resolve(ast));
-  } else if (ast is NotExpr) {
-    return '(SELECT id FROM images) EXCEPT (${buildImageIdSubquery(ast.child, resolve)})';
-  } else if (ast is AndExpr) {
-    return '(${buildImageIdSubquery(ast.left, resolve)}) INTERSECT '
-        '(${buildImageIdSubquery(ast.right, resolve)})';
-  } else if (ast is OrExpr) {
-    return '(${buildImageIdSubquery(ast.left, resolve)}) UNION '
-        '(${buildImageIdSubquery(ast.right, resolve)})';
+  final compiled = <Expr, String>{};
+  final pending = <Expr>[ast];
+
+  while (pending.isNotEmpty) {
+    final node = pending.last;
+
+    if (node is TagRef) {
+      pending.removeLast();
+      compiled[node] = _tagRefSql(resolve(node));
+      continue;
+    }
+
+    // 后序：孩子还没编译完就先把它们压栈
+    final (left, right) = switch (node) {
+      NotExpr(:final child) => (child, null),
+      AndExpr(:final left, :final right) => (left, right),
+      OrExpr(:final left, :final right) => (left, right),
+      _ => throw StateError('未知的表达式节点类型'),
+    };
+    if (!compiled.containsKey(left) ||
+        (right != null && !compiled.containsKey(right))) {
+      if (right != null && !compiled.containsKey(right)) pending.add(right);
+      if (!compiled.containsKey(left)) pending.add(left);
+      continue;
+    }
+
+    pending.removeLast();
+    compiled[node] = switch (node) {
+      NotExpr() => '(SELECT id FROM images) EXCEPT (${compiled[left]})',
+      AndExpr() => '(${compiled[left]}) INTERSECT (${compiled[right]})',
+      OrExpr() => '(${compiled[left]}) UNION (${compiled[right]})',
+      _ => throw StateError('未知的表达式节点类型'),
+    };
   }
-  throw StateError('未知的表达式节点类型');
+
+  return compiled[ast]!;
 }
 
 String _tagRefSql(List<int> ids) {

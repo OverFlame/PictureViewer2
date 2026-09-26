@@ -225,6 +225,13 @@ class _ThumbnailCard extends StatefulWidget {
 class _ThumbnailCardState extends State<_ThumbnailCard> {
   bool _thumbReady = false;
 
+  /// 生成中的标记，避免 build 触发和 initState 触发撞在一起重复解码
+  bool _generating = false;
+
+  /// 已经为哪个缩略图路径尝试过生成。
+  /// 生成失败时路径不变，靠它挡住 build 里每帧重试。
+  String? _attemptedPath;
+
   @override
   void initState() {
     super.initState();
@@ -236,22 +243,28 @@ class _ThumbnailCardState extends State<_ThumbnailCard> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.image.path != widget.image.path) {
       _thumbReady = false;
+      _attemptedPath = null;
       _checkAndGenerate();
     }
   }
 
   Future<void> _checkAndGenerate() async {
+    if (_generating) return;
+    _generating = true;
     final path = widget.image.path;
-    final thumbFile = File(ThumbnailService.instance.thumbPath(path, size: 300));
-    if (thumbFile.existsSync()) {
-      if (mounted) setState(() => _thumbReady = true);
-      return;
-    }
+    final thumbPath = ThumbnailService.instance.thumbPath(path, size: 300);
+    final thumbFile = File(thumbPath);
+    _attemptedPath = thumbPath;
     try {
-      await ThumbnailService.instance.ensureThumbnail(path, size: 300);
+      if (!thumbFile.existsSync()) {
+        await ThumbnailService.instance.ensureThumbnail(path, size: 300);
+      }
       if (mounted) setState(() => _thumbReady = true);
     } catch (e) {
       logDebug('Grid', 'Thumbnail generate failed: $path ($e)');
+      if (mounted) setState(() => _thumbReady = false);
+    } finally {
+      _generating = false;
     }
   }
 
@@ -259,7 +272,21 @@ class _ThumbnailCardState extends State<_ThumbnailCard> {
 
   @override
   Widget build(BuildContext context) {
-    final thumbFile = File(ThumbnailService.instance.thumbPath(widget.image.path, size: 300));
+    final thumbPath =
+        ThumbnailService.instance.thumbPath(widget.image.path, size: 300);
+    final thumbFile = File(thumbPath);
+    final thumbMissing = !thumbFile.existsSync();
+
+    // 源文件内容变了，缩略图会落到带新 mtime 的文件名上。发现路径失效就补一次
+    // 生成：build 里不能 setState，推到下一帧。每个路径只补一次，
+    // 生成失败时路径不变，不会变成每帧重试。
+    if (thumbMissing && !_generating && _attemptedPath != thumbPath) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_generating && _attemptedPath != thumbPath) {
+          _checkAndGenerate();
+        }
+      });
+    }
 
     if (!widget.compact) {
       // 列表行
@@ -274,7 +301,7 @@ class _ThumbnailCardState extends State<_ThumbnailCard> {
               SizedBox(
                 width: 40,
                 height: 40,
-                child: _thumbReady && thumbFile.existsSync()
+                child: _thumbReady && !thumbMissing
                     ? Image.file(thumbFile, fit: BoxFit.cover,
                         errorBuilder: (_, __, ___) => _placeholder())
                     : _placeholder(),
@@ -319,7 +346,7 @@ class _ThumbnailCardState extends State<_ThumbnailCard> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            if (_thumbReady && thumbFile.existsSync())
+            if (_thumbReady && !thumbMissing)
               Image.file(thumbFile, fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) => _placeholder())
             else

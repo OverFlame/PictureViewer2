@@ -53,6 +53,12 @@ class AppState extends ChangeNotifier {
   bool _loading = false;
   bool get loading => _loading;
 
+  /// 每次 refresh 自增的序号。异步回包靠它判断自己是否已经过期。
+  ///
+  /// 搜索是防抖过的，但筛选、切文件夹、导入进度都可能同时触发 refresh；
+  /// 没有序号时先发的请求后落地，列表会显示上一个关键词的结果。
+  int _refreshSeq = 0;
+
   // ── 选中（单选 + 多选） ──
   int? _selectedId;
   int? get selectedId => _selectedId;
@@ -196,6 +202,7 @@ class AppState extends ChangeNotifier {
   // ═══════════════ 图片加载 ═══════════════
 
   Future<void> refresh() async {
+    final seq = ++_refreshSeq;
     logInfo('AppState', 'refresh() — clearing cache, reloading page 0');
     _imageTags.clear();
     _images.clear();
@@ -203,11 +210,14 @@ class AppState extends ChangeNotifier {
     _selectedIds.clear();
     _anchorId = null;
     notifyListeners();
-    await _loadCenter();
+    await _loadCenter(seq);
   }
 
+  /// 本次加载是否已被更新的 refresh 顶掉
+  bool _stale(int seq) => seq != _refreshSeq;
+
   /// 加载中间栏内容（资源管理器式：子文件夹 + 直接图片；搜索时扁平）。
-  Future<void> _loadCenter() async {
+  Future<void> _loadCenter(int seq) async {
     _loading = true;
     notifyListeners();
     try {
@@ -216,12 +226,13 @@ class AppState extends ChangeNotifier {
 
       // 搜索：扁平结果（匹配文件名或别名）
       if (search.isNotEmpty) {
-        _centerFolders = [];
         var list = await _imageDao.searchByName(search);
         if (filterActive) {
           final ids = await _computeMatchingIds();
           list = list.where((i) => ids.contains(i.id)).toList();
         }
+        if (_stale(seq)) return;
+        _centerFolders = [];
         _images = _sortImagesList(list);
         _totalCount = _images.length;
         logInfo('AppState', 'Search "$search": ${_images.length} results');
@@ -248,14 +259,17 @@ class AppState extends ChangeNotifier {
         folders = await _filterFolders(folders, ids);
       }
 
+      if (_stale(seq)) return;
       _centerFolders = _sortFolders(folders);
       _images = _sortImagesList(images);
       _totalCount = _images.length;
       logInfo('AppState',
           'Center loaded: ${_centerFolders.length} folders, ${_images.length} images');
     } finally {
-      _loading = false;
-      notifyListeners();
+      if (!_stale(seq)) {
+        _loading = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -454,22 +468,27 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<Tag> createTag(String name,
+  /// 新建标签。
+  ///
+  /// 返回的 `created` 为 false 表示同名标签已经存在、这次复用了它。调用方
+  /// 应当据此给用户提示：静默复用会让人以为新建成功，之后到处找不到新标签。
+  Future<({Tag tag, bool created})> createTag(String name,
       {String namespace = '', String color = '#cba6f7'}) async {
+    final ns = namespace.isEmpty ? 'general' : namespace;
+
     // 在已加载的标签中查找
     final match = _allTags.where(
-        (t) => t.name.toLowerCase() == name.toLowerCase() &&
-                t.namespace == (namespace.isEmpty ? 'general' : namespace));
-    if (match.isNotEmpty) return match.first;
+        (t) => t.name.toLowerCase() == name.toLowerCase() && t.namespace == ns);
+    if (match.isNotEmpty) return (tag: match.first, created: false);
 
-    logInfo('AppState', 'Creating tag: "$name" (ns=${namespace.isEmpty ? "general" : namespace})');
+    logInfo('AppState', 'Creating tag: "$name" (ns=$ns)');
     final tag = await _tagDao.insert(Tag(
       name: name,
-      namespace: namespace.isEmpty ? 'general' : namespace,
+      namespace: ns,
       color: color,
     ));
     await loadTags();
-    return tag;
+    return (tag: tag, created: true);
   }
 
   Future<void> deleteTag(int tagId) async {
