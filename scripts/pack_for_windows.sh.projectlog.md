@@ -29,3 +29,8 @@
   `M scripts/pack_for_windows.sh`。
 - 已知缺口：包内不含 `.dart_tool/`、`build/`、各平台 `ephemeral/` 与 `logs/`，这些需要在 Windows 上由
   `flutter pub get` 与构建重新生成；本机无法验证 Windows 侧的解压行为，那一步要在目标机器上做。
+- 追加改动：包内说明不再指定目标路径。原来「一、解压」写着「解压到短路径下，例如 `C:\dev\`」，
+  「三、构建」写着 `cd C:\dev\PictureViewer2`；现在改成 `<你挑的目录>\PictureViewer2` 与
+  `cd <解压目录>\PictureViewer2`，并补了一句两个脚本都按自身所在目录定位项目根。
+  原因：包放在哪里由使用者决定，写死盘符会让人以为必须放在那个位置，而且目标机器上未必有该盘。
+  上面第 25 行那句 `C:\dev\PictureViewer2` 是当时缺陷描述里的引文，不是当前说明的内容。

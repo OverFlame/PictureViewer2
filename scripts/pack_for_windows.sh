@@ -168,16 +168,17 @@ sed -e "s|@@PKG_NAME@@|${PKG_NAME}|g" \
 ## 一、解压
 
 1. 把整份 zip 拷到目标机器，不要用「逐个文件复制」的方式搬运。
-2. 留出至少 1 GB 空间：依赖下载与构建产物会占用数百 MB。
-3. 解压到短路径下，例如 `C:\dev\`，解压后目录是 `C:\dev\PictureViewer2`。
-   Flutter 的构建路径很深，根目录越短越不容易撞上 Windows 的 260 字符路径上限。
+2. 自己挑一个解压目录，路径尽量短，别放到系统盘的深层目录里。Flutter 的构建路径本身很长，
+   上面的目录越深越容易撞上 Windows 的 260 字符路径上限。
+3. 解压后多出一层固定叫 `PictureViewer2` 的目录，也就是 `<你挑的目录>\PictureViewer2`。
+4. 留出至少 1 GB 空间：依赖下载与构建产物会占用数百 MB。
 
 ## 二、核对完整性
 
 1. 哈希比对。PowerShell 里执行：
    `Get-FileHash .\@@PKG_NAME@@.zip -Algorithm SHA256`
    结果与随包的 `@@PKG_NAME@@.zip.sha256` 文件里的值一致即可。
-2. 文件数比对。解压后进入 `PictureViewer2` 目录，依次执行：
+2. 文件数比对。解压后进入那层固定的 `PictureViewer2` 目录，依次执行：
    `git config core.autocrlf false`
    `git status --short`
    除了 `?? docs/` 与 `?? TRANSFER-README.md`，不应出现其他行。
@@ -186,10 +187,14 @@ sed -e "s|@@PKG_NAME@@|${PKG_NAME}|g" \
 
 ## 三、构建
 
+在 PowerShell 里进入你自己解压出来的目录再构建，把 `<解压目录>` 换成实际路径：
+
 ```powershell
-cd C:\dev\PictureViewer2
+cd <解压目录>\PictureViewer2
 pwsh -File scripts\build_windows.ps1
 ```
+
+两个脚本都按自身所在目录定位项目根，所以解压到哪里、用哪个盘都能跑，不需要改脚本里的路径。
 
 产物在 `build\windows\x64\runner\release\pictureviewer.exe`。
 脚本默认先跑 `flutter pub get`，再构建；首次运行需要能访问 pub 与 GitHub Releases。
