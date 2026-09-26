@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 import '../utils/log_util.dart';
+import 'sql_like.dart';
 
 /// 图片数据类
 class ImageItem {
@@ -190,23 +191,25 @@ class ImageDao {
 
   // ═══ 查询 ═══
 
-  /// 分页查询（按录入时间倒序，可选搜索过滤）
+  /// 分页查询（默认按录入时间倒序，可选搜索过滤）
   Future<List<ImageItem>> queryPage({
     int offset = 0,
     int limit = 100,
     String? search,
+    String sortKey = 'added_at',
+    bool descending = true,
   }) async {
     String? where;
     List<dynamic>? whereArgs;
     if (search != null && search.isNotEmpty) {
-      where = 'filename LIKE ?';
-      whereArgs = ['%$search%'];
+      where = 'filename LIKE ? $_likeEscape';
+      whereArgs = ['%${escapeLike(search)}%'];
     }
     final rows = await _db.query(
       'images',
       where: where,
       whereArgs: whereArgs,
-      orderBy: 'added_at DESC',
+      orderBy: orderByClause(sortKey: sortKey, descending: descending),
       limit: limit,
       offset: offset,
     );
@@ -220,7 +223,8 @@ class ImageDao {
   Future<List<ImageItem>> queryByDir(String dirPath) async {
     final (prefix, _) = _directPrefix(dirPath);
     final rows = await _db.query('images',
-        where: 'path LIKE ?', whereArgs: ['$prefix%']);
+        where: 'path LIKE ? $_likeEscape',
+        whereArgs: ['${escapeLike(prefix)}%']);
     return rows.map(ImageItem.fromMap).toList();
   }
 
@@ -228,8 +232,8 @@ class ImageDao {
   Future<List<ImageItem>> queryByDirs(List<String> dirPaths) async {
     if (dirPaths.isEmpty) return [];
     final prefixes = dirPaths.map((d) => _directPrefix(d).$1).toList();
-    final conditions = prefixes.map((_) => 'path LIKE ?').join(' OR ');
-    final args = prefixes.map((p) => '$p%').toList();
+    final conditions = prefixes.map((_) => 'path LIKE ? $_likeEscape').join(' OR ');
+    final args = prefixes.map((p) => '${escapeLike(p)}%').toList();
     final rows =
         await _db.query('images', where: conditions, whereArgs: args);
     return rows.map(ImageItem.fromMap).toList();
@@ -239,19 +243,27 @@ class ImageDao {
   /// 例如 dirPath = D:\Photos\2024 只匹配 D:\Photos\2024\a.jpg，
   /// 不匹配 D:\Photos\2024\vacation\b.jpg。
   Future<List<ImageItem>> queryDirectInDir(String dirPath,
-      {int offset = 0, int limit = 200, String? search}) async {
+      {int offset = 0,
+      int limit = 200,
+      String? search,
+      String sortKey = 'added_at',
+      bool descending = true}) async {
     final (prefix, sep) = _directPrefix(dirPath);
-    final conditions = <String>['path LIKE ?', 'path NOT LIKE ?'];
-    final args = <dynamic>['$prefix%', '$prefix%$sep%'];
+    final escaped = escapeLike(prefix);
+    final conditions = <String>[
+      'path LIKE ? $_likeEscape',
+      'path NOT LIKE ? $_likeEscape',
+    ];
+    final args = <dynamic>['$escaped%', '$escaped%${escapeLike(sep)}%'];
     if (search != null && search.isNotEmpty) {
-      conditions.add('filename LIKE ?');
-      args.add('%$search%');
+      conditions.add('filename LIKE ? $_likeEscape');
+      args.add('%${escapeLike(search)}%');
     }
     final rows = await _db.query(
       'images',
       where: conditions.join(' AND '),
       whereArgs: args,
-      orderBy: 'added_at DESC',
+      orderBy: orderByClause(sortKey: sortKey, descending: descending),
       limit: limit,
       offset: offset,
     );
@@ -261,11 +273,15 @@ class ImageDao {
   /// 统计某目录下「直接包含」的图片数量
   Future<int> countDirectInDir(String dirPath, {String? search}) async {
     final (prefix, sep) = _directPrefix(dirPath);
-    final conditions = <String>['path LIKE ?', 'path NOT LIKE ?'];
-    final args = <dynamic>['$prefix%', '$prefix%$sep%'];
+    final escaped = escapeLike(prefix);
+    final conditions = <String>[
+      'path LIKE ? $_likeEscape',
+      'path NOT LIKE ? $_likeEscape',
+    ];
+    final args = <dynamic>['$escaped%', '$escaped%${escapeLike(sep)}%'];
     if (search != null && search.isNotEmpty) {
-      conditions.add('filename LIKE ?');
-      args.add('%$search%');
+      conditions.add('filename LIKE ? $_likeEscape');
+      args.add('%${escapeLike(search)}%');
     }
     final where = 'WHERE ${conditions.join(' AND ')}';
     final result = await _db.rawQuery(
@@ -273,6 +289,30 @@ class ImageDao {
       args,
     );
     return result.first['cnt'] as int;
+  }
+
+  /// LIKE 的转义符声明。实现见 [sqlLikeEscape]（与 TagDao 共用）。
+  static const String _likeEscape = sqlLikeEscape;
+
+  /// 排序键 → SQL ORDER BY。
+  ///
+  /// [sortKey] 来自持久化设置，必须走白名单：不能直接拼进 SQL。
+  /// 语义与原先 Dart 侧排序对齐——主键相同时按文件名不区分大小写，
+  /// NULL 的 `alias` / `file_size` / `file_mtime` 按 0 或空串参与比较。
+  static String orderByClause({
+    String sortKey = 'added_at',
+    bool descending = true,
+  }) {
+    const columns = <String, String>{
+      'filename': 'filename COLLATE NOCASE',
+      'alias': "COALESCE(alias, '') COLLATE NOCASE",
+      'file_size': 'COALESCE(file_size, 0)',
+      'file_mtime': 'COALESCE(file_mtime, 0)',
+      'added_at': 'added_at',
+    };
+    final main = columns[sortKey] ?? columns['added_at']!;
+    final dir = descending ? 'DESC' : 'ASC';
+    return '$main $dir, filename COLLATE NOCASE $dir';
   }
 
   /// 归一化目录路径，返回 (带分隔符的前缀, 分隔符)
@@ -296,8 +336,8 @@ class ImageDao {
       args.addAll(idFilter);
     }
     if (search != null && search.isNotEmpty) {
-      conditions.add('filename LIKE ?');
-      args.add('%$search%');
+      conditions.add('filename LIKE ? $_likeEscape');
+      args.add('%${escapeLike(search)}%');
     }
 
     final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
@@ -313,6 +353,8 @@ class ImageDao {
     int offset = 0,
     int limit = 100,
     String? search,
+    String sortKey = 'added_at',
+    bool descending = true,
   }) async {
     if (ids.isEmpty) return [];
     final placeholders = ids.map((_) => '?').join(',');
@@ -320,15 +362,15 @@ class ImageDao {
     final args = <dynamic>[...ids];
 
     if (search != null && search.isNotEmpty) {
-      conditions.write(' AND filename LIKE ?');
-      args.add('%$search%');
+      conditions.write(' AND filename LIKE ? $_likeEscape');
+      args.add('%${escapeLike(search)}%');
     }
 
     final rows = await _db.query(
       'images',
       where: conditions.toString(),
       whereArgs: args,
-      orderBy: 'added_at DESC',
+      orderBy: orderByClause(sortKey: sortKey, descending: descending),
       limit: limit,
       offset: offset,
     );
@@ -336,12 +378,18 @@ class ImageDao {
   }
 
   /// 按文件名或别名模糊搜索（用于搜索模式）
-  Future<List<ImageItem>> searchByName(String q, {int limit = 100000}) async {
+  Future<List<ImageItem>> searchByName(
+    String q, {
+    int limit = 100000,
+    String sortKey = 'added_at',
+    bool descending = true,
+  }) async {
+    final pattern = '%${escapeLike(q)}%';
     final rows = await _db.query(
       'images',
-      where: 'filename LIKE ? OR alias LIKE ?',
-      whereArgs: ['%$q%', '%$q%'],
-      orderBy: 'added_at DESC',
+      where: 'filename LIKE ? $_likeEscape OR alias LIKE ? $_likeEscape',
+      whereArgs: [pattern, pattern],
+      orderBy: orderByClause(sortKey: sortKey, descending: descending),
       limit: limit,
     );
     return rows.map(ImageItem.fromMap).toList();
@@ -402,8 +450,8 @@ class ImageDao {
         ? dirPath
         : '$dirPath${dirPath.contains('\\') ? '\\' : '/'}';
     final rows = await _db.rawQuery(
-      'SELECT path FROM images WHERE path LIKE ?',
-      ['$normalized%'],
+      'SELECT path FROM images WHERE path LIKE ? $_likeEscape',
+      ['%${escapeLike(normalized)}%'],
     );
     return rows.map((r) => r['path'] as String).toList();
   }

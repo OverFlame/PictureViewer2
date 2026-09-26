@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 import '../utils/filter_expression.dart';
 import '../utils/log_util.dart';
+import 'sql_like.dart';
 
 /// 标签数据类
 class Tag {
@@ -145,8 +146,8 @@ class TagDao {
   /// 搜索标签（模糊匹配 name）
   Future<List<Tag>> search(String query) async {
     final rows = await _db.query('tags',
-        where: 'name LIKE ?',
-        whereArgs: ['%$query%'],
+        where: 'name LIKE ? $sqlLikeEscape',
+        whereArgs: ['%${escapeLike(query)}%'],
         orderBy: 'name',
         limit: 50);
     return rows.map(Tag.fromMap).toList();

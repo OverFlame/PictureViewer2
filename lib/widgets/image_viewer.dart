@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -35,6 +36,9 @@ class _ImageViewerState extends State<ImageViewer> {
   bool _isImageLoading = true;
   int _prevViewerIndex = -1;
   int _displayedImageId = -1;
+
+  /// 当前图片文件是否不存在。由异步检查更新，build 里不做同步 stat。
+  bool _fileMissing = false;
 
   final Map<int, ExifData?> _exifCache = {};
   ExifData? _currentExif;
@@ -79,14 +83,51 @@ class _ImageViewerState extends State<ImageViewer> {
     _zoomLevel = 1.0;
     _isFitToWindow = true;
     _isImageLoading = true;
+    _fileMissing = false;
     _displayedImageId = id;
 
     // 文件内容被外部替换过就丢掉解码缓存。FileImage 的缓存键只有
     // path + scale，不驱逐的话原地显示的还是旧图。
     ImageCacheGuard.evictIfChanged(img.path);
 
+    _checkFileExists(img.path);
     _loadExifForCurrent();
     _preloadAdjacent();
+  }
+
+  /// 文件存在性异步确认：同步 stat 放在 build 里会随每次重建做一次磁盘 IO。
+  Future<void> _checkFileExists(String path) async {
+    final checkedId = _displayedImageId;
+    final exists = await File(path).exists();
+    if (!mounted || checkedId != _displayedImageId) return;
+    if (!exists && !_fileMissing) {
+      setState(() => _fileMissing = true);
+    } else if (exists && _fileMissing) {
+      setState(() => _fileMissing = false);
+    }
+  }
+
+  /// 适配窗口时按屏幕像素解码的宽度；1:1 或放大时返回 null（用原图）。
+  ///
+  /// 24MP 的图整幅解码约 96MB，而 ImageCache 默认上限只有 100MiB：
+  /// 前后两张预载同时在缓存里就接近上限，滚动时会被迫反复丢弃重解码。
+  int? _fitCacheWidth(ImageItem item) {
+    if (!_isFitToWindow) return null;
+    final media = MediaQuery.maybeOf(context);
+    if (media == null) return null;
+    final target = (media.size.width * media.devicePixelRatio).round();
+    if (target <= 0) return null;
+    final w = item.width;
+    // 屏幕比原图宽时放大解码没有意义
+    if (w != null && w <= target) return null;
+    return target;
+  }
+
+  /// 与 [Image] 实际使用的 provider 一致，预载才能命中同一份缓存。
+  ImageProvider _providerFor(ImageItem item) {
+    final file = File(item.path);
+    final width = _fitCacheWidth(item);
+    return width == null ? FileImage(file) : ResizeImage(FileImage(file), width: width);
   }
 
   // ============================================================
@@ -203,30 +244,28 @@ class _ImageViewerState extends State<ImageViewer> {
   // ============================================================
 
   void _preloadAdjacent() {
-    final imgs = _st.viewerImages;
-    final idx = _st.viewerIndex;
+    // 预载要读 MediaQuery 算解码宽度，而 initState / build 阶段不能读
+    // InheritedWidget，推到下一帧做。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final imgs = _st.viewerImages;
+      final idx = _st.viewerIndex;
 
-    if (idx > 0) {
-      final prev = imgs[idx - 1];
-      final prov = FileImage(File(prev.path));
-      final stream = prov.resolve(ImageConfiguration.empty);
-      stream.addListener(ImageStreamListener(
-        (_, __) {},
-        onError: (_, __) {},
-      ));
-    }
+      void preload(ImageItem item) {
+        // precacheImage 自己会在完成/失败后移除监听，比手工
+        // addListener 更可靠（手工那种永远不移除）。
+        unawaited(precacheImage(
+          _providerFor(item),
+          context,
+          onError: (_, __) {},
+        ));
+      }
 
-    if (idx < imgs.length - 1) {
-      final next = imgs[idx + 1];
-      final prov = FileImage(File(next.path));
-      final stream = prov.resolve(ImageConfiguration.empty);
-      stream.addListener(ImageStreamListener(
-        (_, __) {},
-        onError: (_, __) {},
-      ));
-    }
+      if (idx > 0) preload(imgs[idx - 1]);
+      if (idx < imgs.length - 1) preload(imgs[idx + 1]);
 
-    logDebug('Viewer', 'Preload: prev=${idx > 0} next=${idx < imgs.length - 1}');
+      logDebug('Viewer', 'Preload: prev=${idx > 0} next=${idx < imgs.length - 1}');
+    });
   }
 
   // ============================================================
@@ -347,13 +386,13 @@ class _ImageViewerState extends State<ImageViewer> {
     final img = _st.viewerImage;
     if (img == null) return const SizedBox.shrink();
 
-    final file = File(img.path);
-    if (!file.existsSync()) {
+    // 存在性由 _checkFileExists 异步确认，这里只读状态，不做同步 IO。
+    if (_fileMissing) {
       return _buildErrorWidget('文件不存在: ${img.filename}');
     }
 
-    return Image.file(
-      file,
+    return Image(
+      image: _providerFor(img),
       key: key,
       fit: BoxFit.contain,
       gaplessPlayback: true,

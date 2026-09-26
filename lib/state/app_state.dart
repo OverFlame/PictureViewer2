@@ -48,6 +48,22 @@ class AppState extends ChangeNotifier {
   // ── 图片列表 ──
   List<ImageItem> _images = [];
   List<ImageItem> get images => _images;
+
+  /// id → 图片的索引，跟着 [_images] 一起更新。
+  ///
+  /// 详情面板每次构建都会读 [selectedImage]，原来是在整页列表上
+  /// `firstWhere` 线性扫描；两万张时每次通知都要扫一遍。
+  final Map<int, ImageItem> _imageIndex = {};
+
+  /// 统一替换列表并重建索引（不要直接给 [_images] 赋值）。
+  void _setImages(List<ImageItem> list) {
+    _images = list;
+    _imageIndex.clear();
+    for (final img in list) {
+      final id = img.id;
+      if (id != null) _imageIndex[id] = img;
+    }
+  }
   int _totalCount = 0;
   int get totalCount => _totalCount;
   bool _loading = false;
@@ -63,12 +79,7 @@ class AppState extends ChangeNotifier {
   int? _selectedId;
   int? get selectedId => _selectedId;
   ImageItem? get selectedImage =>
-      _selectedId == null
-          ? null
-          : _images.cast<ImageItem?>().firstWhere(
-                (i) => i?.id == _selectedId,
-                orElse: () => null,
-              );
+      _selectedId == null ? null : _imageIndex[_selectedId];
   final Set<int> _selectedIds = {};
   Set<int> get selectedIds => _selectedIds;
   bool isSelected(int id) => _selectedIds.contains(id);
@@ -135,6 +146,17 @@ class AppState extends ChangeNotifier {
   bool get sortDescending => _sortDescending;
   String _viewMode = 'grid';
   String get viewMode => _viewMode;
+
+  // ── 缩略图缓存世代 ──
+  /// 缓存被清空时自增。图片卡片把它当 widget 参数，靠 didUpdateWidget
+  /// 重新生成缩略图；否则清完缓存后已在屏的卡片会一直显示占位图。
+  int _thumbEpoch = 0;
+  int get thumbEpoch => _thumbEpoch;
+
+  void markThumbnailsCleared() {
+    _thumbEpoch++;
+    notifyListeners();
+  }
 
   // ── 全屏查看器 ──
   List<ImageItem> _viewerImages = [];
@@ -205,7 +227,7 @@ class AppState extends ChangeNotifier {
     final seq = ++_refreshSeq;
     logInfo('AppState', 'refresh() — clearing cache, reloading page 0');
     _imageTags.clear();
-    _images.clear();
+    _setImages([]);
     _selectedId = null;
     _selectedIds.clear();
     _anchorId = null;
@@ -226,14 +248,15 @@ class AppState extends ChangeNotifier {
 
       // 搜索：扁平结果（匹配文件名或别名）
       if (search.isNotEmpty) {
-        var list = await _imageDao.searchByName(search);
+        var list = await _imageDao.searchByName(search,
+            sortKey: _sortKey, descending: _sortDescending);
         if (filterActive) {
           final ids = await _computeMatchingIds();
           list = list.where((i) => ids.contains(i.id)).toList();
         }
         if (_stale(seq)) return;
         _centerFolders = [];
-        _images = _sortImagesList(list);
+        _setImages(list);
         _totalCount = _images.length;
         logInfo('AppState', 'Search "$search": ${_images.length} results');
         return;
@@ -247,7 +270,10 @@ class AppState extends ChangeNotifier {
         final folderPath = _currentFolderPath;
         images = (folderPath == null || folderPath.isEmpty)
             ? <ImageItem>[]
-            : await _imageDao.queryDirectInDir(folderPath, limit: 100000);
+            : await _imageDao.queryDirectInDir(folderPath,
+                limit: 100000,
+                sortKey: _sortKey,
+                descending: _sortDescending);
       } else {
         folders = await _folderDao.listRoot();
         images = <ImageItem>[];
@@ -261,7 +287,7 @@ class AppState extends ChangeNotifier {
 
       if (_stale(seq)) return;
       _centerFolders = _sortFolders(folders);
-      _images = _sortImagesList(images);
+      _setImages(images);
       _totalCount = _images.length;
       logInfo('AppState',
           'Center loaded: ${_centerFolders.length} folders, ${_images.length} images');
@@ -298,11 +324,17 @@ class AppState extends ChangeNotifier {
           await _tagDao.getTagsForFolders(folders.map((f) => f.id!).toList());
     }
 
+    // 一次查询取回全部子文件夹路径，再把匹配图片的祖先目录建成集合。
+    // 原来是每个文件夹一次查询、每条路径对全部匹配图片做一次
+    // toLowerCase + startsWith，150 个文件夹 × 4060 张图时是十万级比较。
+    final folderIds = folders.map((f) => f.id!).toList();
+    final allPaths = await _folderDao.getPathsForFolders(folderIds);
+    final ancestors = _ancestorDirs(matchingPaths);
+
     final result = <VirtualFolder>[];
     for (final f in folders) {
-      final paths = await _folderDao.getPaths(f.id!);
-      final containsImage = paths.any(
-          (p) => matchingPaths.any((mp) => _isUnderPath(mp, p.path)));
+      final paths = allPaths[f.id] ?? const <FolderPath>[];
+      final containsImage = paths.any((p) => ancestors.contains(_dirKey(p.path)));
       if (containsImage) {
         result.add(f);
         continue;
@@ -313,6 +345,32 @@ class AppState extends ChangeNotifier {
       }
     }
     return result;
+  }
+
+  /// 目录路径的比较键：小写、去掉末尾分隔符，根目录归一为空串。
+  static String _dirKey(String path) {
+    var s = path.toLowerCase();
+    while (s.length > 1 && (s.endsWith('\\') || s.endsWith('/'))) {
+      s = s.substring(0, s.length - 1);
+    }
+    if (s == '\\' || s == '/') return '';
+    return s;
+  }
+
+  /// 一批图片路径的全部祖先目录集合（按分隔符切分，含根目录）。
+  ///
+  /// 用于把「路径是否在某目录下」的判断换成集合查找。
+  static Set<String> _ancestorDirs(Iterable<String> paths) {
+    final dirs = <String>{};
+    for (final raw in paths) {
+      final p = raw.toLowerCase();
+      for (var i = p.length - 1; i >= 0; i--) {
+        final c = p[i];
+        if (c != '/' && c != '\\') continue;
+        dirs.add(i == 0 ? '' : _dirKey(p.substring(0, i)));
+      }
+    }
+    return dirs;
   }
 
   /// 文件夹直接持有的标签是否满足当前简单筛选（AND/OR/NOT 语义）
@@ -327,49 +385,8 @@ class AppState extends ChangeNotifier {
     return true;
   }
 
-  bool _isUnderPath(String path, String dir) {
-    final a = path.toLowerCase();
-    var b = dir.toLowerCase();
-    if (b.endsWith('\\') || b.endsWith('/')) {
-      b = b.substring(0, b.length - 1);
-    }
-    if (a == b) return false;
-    return a.startsWith('$b\\') || a.startsWith('$b/');
-  }
-
   List<VirtualFolder> _sortFolders(List<VirtualFolder> list) {
     list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    return list;
-  }
-
-  List<ImageItem> _sortImagesList(List<ImageItem> list) {
-    final dir = _sortDescending ? -1 : 1;
-    list.sort((a, b) {
-      int cmp;
-      switch (_sortKey) {
-        case 'filename':
-          cmp = a.filename.toLowerCase().compareTo(b.filename.toLowerCase());
-          break;
-        case 'alias':
-          cmp = (a.alias ?? '')
-              .toLowerCase()
-              .compareTo((b.alias ?? '').toLowerCase());
-          break;
-        case 'file_size':
-          cmp = (a.fileSize ?? 0).compareTo(b.fileSize ?? 0);
-          break;
-        case 'file_mtime':
-          cmp = (a.fileMtime ?? 0).compareTo(b.fileMtime ?? 0);
-          break;
-        default:
-          cmp = a.addedAt.compareTo(b.addedAt);
-          break;
-      }
-      if (cmp == 0) {
-        cmp = a.filename.toLowerCase().compareTo(b.filename.toLowerCase());
-      }
-      return cmp * dir;
-    });
     return list;
   }
 
@@ -681,7 +698,7 @@ class AppState extends ChangeNotifier {
     await _imageDao.setAlias(id, alias);
     final updated = await _imageDao.getById(id);
     if (updated != null) {
-      _images = _images.map((i) => i.id == id ? updated : i).toList();
+      _setImages(_images.map((i) => i.id == id ? updated : i).toList());
     }
     notifyListeners();
   }
@@ -1002,11 +1019,19 @@ class AppState extends ChangeNotifier {
       final importService = ImportService.fromDB();
       final stream = importService.importPaths(paths);
 
+      // 导入期间每条记录都 notifyListeners 会让根部 Consumer 重建整个
+      // MaterialApp（含两份 ThemeData）；进度条只需要整百分比变化时刷新。
+      var lastPercent = -1;
       await for (final progress in stream) {
+        final whole = (progress.percent * 100).floor();
+        if (whole == lastPercent) continue;
+        lastPercent = whole;
         _importProgress = progress.percent;
         notifyListeners();
       }
       logInfo('AppState', 'Import complete');
+      _importProgress = 1;
+      notifyListeners();
 
       unawaited(_generateThumbnailsForPaths(paths));
     } catch (e) {
@@ -1031,14 +1056,20 @@ class AppState extends ChangeNotifier {
         for (final img in images) {
           try {
             await thumbnailService.ensureThumbnail(img.path, size: 300);
-          } catch (_) {}
+          } catch (e) {
+            logDebug('AppState', 'Thumbnail pre-generation skipped: ${img.path} ($e)');
+          }
         }
       } else if (stat == io.FileSystemEntityType.file) {
         try {
           await thumbnailService.ensureThumbnail(path, size: 300);
-        } catch (_) {}
+        } catch (e) {
+          logDebug('AppState', 'Thumbnail pre-generation skipped: $path ($e)');
+        }
       }
     }
+    // 导入是缓存增长最快的时刻，顺手按用户设的上限回收磁盘缓存
+    await thumbnailService.evictDiskCache(maxSizeMB: _cacheSizeMB);
   }
 
   // ═══════════════ 缩略图 ──

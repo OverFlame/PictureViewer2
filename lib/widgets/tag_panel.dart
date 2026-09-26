@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -7,6 +9,15 @@ import '../theme/catppuccin.dart';
 import '../utils/color_util.dart';
 import '../utils/log_util.dart';
 import 'color_picker_dialog.dart';
+
+/// 标签面板扁平列表的一行：命名空间头或标签项
+class _TagRow {
+  const _TagRow.header(this.namespace) : tag = null;
+  const _TagRow.tag(this.tag) : namespace = null;
+
+  final String? namespace;
+  final Tag? tag;
+}
 
 /// 左侧标签面板 —— 命名空间分组 + 搜索 + CRUD
 class TagPanel extends StatefulWidget {
@@ -19,9 +30,26 @@ class TagPanel extends StatefulWidget {
 class _TagPanelState extends State<TagPanel> {
   final _searchCtrl = TextEditingController();
   String _search = '';
+  Timer? _searchDebounce;
+
+  /// 输入防抖：每敲一个字就全量重建标签列表，2000 个标签会卡手。
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 200), () {
+      if (!mounted) return;
+      setState(() => _search = value);
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchCtrl.clear();
+    setState(() => _search = '');
+  }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -34,12 +62,13 @@ class _TagPanelState extends State<TagPanel> {
     final activeIds = appState.activeTagIds;
 
     // 搜索过滤
+    final query = _search.toLowerCase();
     var filtered = _search.isEmpty
         ? allTags
         : allTags
             .where((t) =>
-                t.name.toLowerCase().contains(_search.toLowerCase()) ||
-                t.namespace.toLowerCase().contains(_search.toLowerCase()))
+                t.name.toLowerCase().contains(query) ||
+                t.namespace.toLowerCase().contains(query))
             .toList();
 
     // 按命名空间分组
@@ -58,6 +87,17 @@ class _TagPanelState extends State<TagPanel> {
         return a.compareTo(b);
       });
 
+    // 拍平成「命名空间头 + 标签项」的单层列表：按命名空间整段建 Column
+    // 时，一个装了上千标签的命名空间会被一次性全部建出来。
+    final rows = <_TagRow>[];
+    for (final ns in sortedNs) {
+      rows.add(_TagRow.header(ns));
+      final tags = namespaces[ns]!..sort((a, b) => a.name.compareTo(b.name));
+      for (final tag in tags) {
+        rows.add(_TagRow.tag(tag));
+      }
+    }
+
     return Container(
       color: Catppuccin.crust,
       child: Column(
@@ -75,13 +115,14 @@ class _TagPanelState extends State<TagPanel> {
           Expanded(
             child: ListView.builder(
               padding: EdgeInsets.zero,
-              itemCount: sortedNs.length,
-              itemBuilder: (ctx, i) => _namespaceGroup(
-                sortedNs[i],
-                namespaces[sortedNs[i]]!,
-                appState,
-                filter,
-              ),
+              itemCount: rows.length,
+              itemBuilder: (ctx, i) {
+                final row = rows[i];
+                final tag = row.tag;
+                return tag == null
+                    ? _namespaceHeader(row.namespace!)
+                    : _tagItem(tag, appState, filter);
+              },
             ),
           ),
         ],
@@ -133,7 +174,7 @@ class _TagPanelState extends State<TagPanel> {
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
       child: TextField(
         controller: _searchCtrl,
-        onChanged: (v) => setState(() => _search = v),
+        onChanged: _onSearchChanged,
         style: const TextStyle(fontSize: 12, color: Catppuccin.text),
         decoration: InputDecoration(
           hintText: '搜索标签...',
@@ -144,10 +185,7 @@ class _TagPanelState extends State<TagPanel> {
               ? IconButton(
                   icon:
                       const Icon(Icons.clear, size: 14, color: Catppuccin.overlay1),
-                  onPressed: () {
-                    _searchCtrl.clear();
-                    setState(() => _search = '');
-                  },
+                  onPressed: _clearSearch,
                   padding: EdgeInsets.zero,
                 )
               : null,
@@ -218,30 +256,19 @@ class _TagPanelState extends State<TagPanel> {
     );
   }
 
-  // ── 命名空间分组 ──
-  Widget _namespaceGroup(
-      String ns, List<Tag> tags, AppState appState, TagFilter filter) {
-    tags.sort((a, b) => a.name.compareTo(b.name));
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // 命名空间头
-        Container(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-          child: Text(
-            ns,
-            style: const TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              color: Catppuccin.overlay2,
-              letterSpacing: 0.5,
-            ),
-          ),
+  // ── 命名空间头 ──
+  Widget _namespaceHeader(String ns) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: Text(
+        ns,
+        style: const TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: Catppuccin.overlay2,
+          letterSpacing: 0.5,
         ),
-        // 标签项
-        ...tags.map((tag) => _tagItem(tag, appState, filter)),
-        const SizedBox(height: 4),
-      ],
+      ),
     );
   }
 

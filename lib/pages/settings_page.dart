@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -324,28 +325,89 @@ class SettingsDialog extends StatelessWidget {
     );
 
     if (confirmed == true && parentContext.mounted) {
-      _clearCacheDirs();
-      ScaffoldMessenger.of(parentContext).showSnackBar(
-        const SnackBar(
-          content: Text('缓存已清除'),
-          duration: Duration(seconds: 2),
+      final messenger = ScaffoldMessenger.of(parentContext);
+      final navigator = Navigator.of(parentContext, rootNavigator: true);
+      final appState = parentContext.read<AppState>();
+      final progress = ValueNotifier<int>(0);
+
+      // 进度对话框自己盯着删除过程；不阻塞其余界面
+      unawaited(showDialog<void>(
+        context: parentContext,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          backgroundColor: Catppuccin.mantle,
+          title: const Text('正在清除缓存',
+              style: TextStyle(color: Catppuccin.text, fontSize: 16)),
+          content: ValueListenableBuilder<int>(
+            valueListenable: progress,
+            builder: (_, done, __) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const LinearProgressIndicator(),
+                const SizedBox(height: 12),
+                Text('已删除 $done 个文件',
+                    style: const TextStyle(
+                        color: Catppuccin.subtext0, fontSize: 13)),
+              ],
+            ),
+          ),
+        ),
+      ));
+
+      final deleted = await _clearCacheDirs(
+        onProgress: (done, _) => progress.value = done,
+      );
+      progress.dispose();
+      navigator.pop();
+      // 通知在屏的图片卡片重新生成缩略图
+      appState.markThumbnailsCleared();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('缓存已清除：$deleted 个文件'),
+          duration: const Duration(seconds: 2),
         ),
       );
     }
   }
 
-  void _clearCacheDirs() {
-    final cacheDir = Directory(ThumbnailService.instance.cacheDir);
-    if (cacheDir.existsSync()) {
-      for (final entity in cacheDir.listSync(recursive: true)) {
-        if (entity is File) {
-          try {
-            entity.deleteSync();
-          } catch (_) {}
-        }
-      }
-      logInfo('Settings', 'Cache cleared');
+  /// 异步删除缓存目录里的全部文件，返回删除条数。
+  ///
+  /// 原来是 `listSync(recursive: true)` + `deleteSync()`：几万个小文件时
+  /// 整个窗口会冻住。改成异步流逐个删，并通过 [onProgress] 汇报进度。
+  Future<int> _clearCacheDirs(
+      {void Function(int done, int total)? onProgress}) async {
+    final service = ThumbnailService.instance;
+    final cacheDir = Directory(service.cacheDir);
+    if (!cacheDir.existsSync()) {
+      service.clearMemoryCache();
+      return 0;
     }
+
+    // 先数一遍，才能给出确定进度
+    final files = <File>[];
+    await for (final entity in cacheDir.list(recursive: true)) {
+      if (entity is File) files.add(entity);
+    }
+
+    var deleted = 0;
+    for (var i = 0; i < files.length; i++) {
+      try {
+        await files[i].delete();
+        deleted++;
+      } catch (e) {
+        logDebug('Settings', '缓存文件删除失败：${files[i].path} ($e)');
+      }
+      // 每 200 个刷新一次进度，避免进度条自己成为性能瓶颈
+      if (onProgress != null && (i % 200 == 0 || i == files.length - 1)) {
+        onProgress(deleted, files.length);
+      }
+    }
+
+    // 磁盘文件删了，内存里还有已经解码的 ui.Image（GPU 纹理）
+    service.clearMemoryCache();
+    logInfo('Settings', 'Cache cleared: $deleted/${files.length} files');
+    return deleted;
   }
 
   // ── 高级筛选：表达式历史缓存条数 ──

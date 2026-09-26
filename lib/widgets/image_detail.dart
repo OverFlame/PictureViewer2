@@ -26,6 +26,29 @@ class _ImageDetailState extends State<ImageDetail> {
   bool _exifLoading = false;
   int? _lastImageId;
 
+  /// 文件存在性与修改时间，由 _loadFileStat 异步填充。
+  /// 放在 build 里同步 stat 会随每次重建做一次磁盘 IO。
+  int? _fileStatId;
+  bool _fileExists = false;
+  DateTime? _fileMtime;
+
+  Future<void> _loadFileStat(int? imageId, String path) async {
+    FileStat? stat;
+    try {
+      stat = await File(path).stat();
+    } catch (e) {
+      logDebug('ImageDetail', 'stat failed for $path: $e');
+      stat = null;
+    }
+    if (!mounted || _lastImageId != imageId) return;
+    final exists = stat != null && stat.type != FileSystemEntityType.notFound;
+    setState(() {
+      _fileStatId = imageId;
+      _fileExists = exists;
+      _fileMtime = exists ? stat!.modified : null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     // 监听 selectedImage 变化
@@ -39,6 +62,7 @@ class _ImageDetailState extends State<ImageDetail> {
       final path = image.path;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _loadExif(requestId, path);
+        if (mounted) _loadFileStat(requestId, path);
       });
     } else if (image == null && _lastImageId != null) {
       _lastImageId = null;
@@ -218,12 +242,11 @@ class _ImageDetailState extends State<ImageDetail> {
 
   // ── 文件信息 ──
   Widget _fileInfoSection(ImageItem image) {
-    final file = File(image.path);
-    final exists = file.existsSync();
-    final stat = exists ? file.statSync() : null;
-    final mtime = stat != null
-        ? DateTime.fromMillisecondsSinceEpoch(stat.modified.millisecondsSinceEpoch)
-        : null;
+    // 状态未知（刚切过来、异步检查还没回）时不显示「已丢失」，
+    // 避免闪一下红条。
+    final known = _fileStatId == image.id;
+    final exists = known && _fileExists;
+    final mtime = known ? _fileMtime : null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

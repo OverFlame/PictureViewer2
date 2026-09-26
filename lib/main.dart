@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -22,6 +24,11 @@ Future<void> main() async {
   await DatabaseManager.instance.init();
   // 初始化缩略图服务（创建缓存目录）
   await ThumbnailService.instance.init();
+
+  // 磁盘缓存按用户设置的上限后台回收：缓存目录里是几万个小文件，
+  // 放在启动路径上同步遍历会直接卡住窗口。不 await，失败只写日志。
+  unawaited(ThumbnailService.instance.evictDiskCache(
+      maxSizeMB: SettingsService.instance.cacheSizeMB));
 
   // 锁定竖屏（桌面端无影响）
   SystemChrome.setPreferredOrientations([

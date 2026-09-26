@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:ui' as ui;
 
 import 'package:crypto/crypto.dart';
@@ -51,6 +53,18 @@ class ThumbnailService {
   static ThumbnailService? _instance;
   final ThumbnailMemoryCache _memoryCache = ThumbnailMemoryCache();
   late String _cacheDir;
+
+  /// 同时解码的原图数量上限。
+  ///
+  /// 每张卡片各自发起生成，不设闸门时快速滚动会让几十张原图同时解码
+  /// （每张解码后是宽×高×4 字节），内存峰值与滚动速度成正比。
+  static const int maxConcurrentGenerations = 3;
+
+  int _activeGenerations = 0;
+  final List<Completer<void>> _generationQueue = [];
+
+  /// 观察到的并发峰值（诊断/测试用）
+  int peakConcurrentGenerations = 0;
 
   ThumbnailService._();
 
@@ -104,6 +118,29 @@ class ThumbnailService {
   Directory _subDirOf(String originalPath) =>
       Directory(p.join(_cacheDir, _hashKey(originalPath).substring(0, 2)));
 
+  /// 占用一个解码名额（超过上限时排队等待）
+  Future<void> _acquireSlot() async {
+    if (_activeGenerations < maxConcurrentGenerations) {
+      _activeGenerations++;
+      if (_activeGenerations > peakConcurrentGenerations) {
+        peakConcurrentGenerations = _activeGenerations;
+      }
+      return;
+    }
+    final waiter = Completer<void>();
+    _generationQueue.add(waiter);
+    await waiter.future;
+  }
+
+  /// 释放解码名额，唤醒下一个等待者
+  void _releaseSlot() {
+    if (_generationQueue.isNotEmpty) {
+      _generationQueue.removeAt(0).complete();
+      return;
+    }
+    if (_activeGenerations > 0) _activeGenerations--;
+  }
+
   /// 确保磁盘缓存目录存在
   Future<void> _ensureSubDir(String subDir) async {
     await Directory(p.join(_cacheDir, subDir)).create(recursive: true);
@@ -129,28 +166,46 @@ class ThumbnailService {
     // 原图解码 → 缩放 → 编码 → 写入磁盘
     logDebug('Thumbnail', 'Generating: ${p.basename(originalPath)} (${size}px)');
     final rawBytes = await originalFile.readAsBytes();
-    final codec = await ui.instantiateImageCodec(
-      rawBytes,
-      targetWidth: size,
-      targetHeight: size,
-    );
-    final frame = await codec.getNextFrame();
-    final image = frame.image;
+    await _acquireSlot();
+    try {
+      final codec = await ui.instantiateImageCodec(
+        rawBytes,
+        targetWidth: size,
+        targetHeight: size,
+      );
+      try {
+        final frame = await codec.getNextFrame();
+        final image = frame.image;
+        try {
+          // 写入 PNG 缩略图
+          final byteData =
+              await image.toByteData(format: ui.ImageByteFormat.png);
+          if (byteData == null) {
+            throw Exception('Failed to encode thumbnail for $originalPath');
+          }
 
-    // 写入 PNG 缩略图
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    if (byteData == null) {
-      throw Exception('Failed to encode thumbnail for $originalPath');
+          final hash = _hashKey(originalPath);
+          final subDir = hash.substring(0, 2);
+          await _ensureSubDir(subDir);
+          // 先写临时文件再改名：写到一半失败时不会留下半张 PNG
+          // 被后续调用当成缓存命中。
+          final tmp = File('$targetPath.tmp');
+          await tmp.writeAsBytes(byteData.buffer.asUint8List(), flush: true);
+          await tmp.rename(targetPath);
+
+          // 清掉同一原图同一尺寸的旧时间戳版本，否则每换一次内容就留一份孤儿
+          await _removeOtherVariants(hash, size,
+              keepName: p.basename(targetPath));
+        } finally {
+          // 之前 dispose 在函数最后一行，前面任何一步抛错都会漏解码结果
+          image.dispose();
+        }
+      } finally {
+        codec.dispose();
+      }
+    } finally {
+      _releaseSlot();
     }
-
-    final hash = _hashKey(originalPath);
-    final subDir = hash.substring(0, 2);
-    await _ensureSubDir(subDir);
-    await File(targetPath).writeAsBytes(byteData.buffer.asUint8List());
-
-    image.dispose();
-    // 清掉同一原图同一尺寸的旧时间戳版本，否则每换一次内容就留一份孤儿
-    await _removeOtherVariants(hash, size, keepName: p.basename(targetPath));
     logDebug('Thumbnail', 'Saved: ${p.basename(targetPath)}');
     return targetPath;
   }
@@ -222,34 +277,26 @@ class ThumbnailService {
     _memoryCache.removeWhere((key) => key.startsWith('$originalPath::'));
   }
 
-  /// 磁盘缓存按 LRU 淘汰（超出上限时清理最旧文件）
+  /// 磁盘缓存按 LRU 淘汰（超出上限时清理最旧的访问过的文件）
+  ///
+  /// 扫描与删除都放到后台 isolate：缓存目录里通常有几万个小文件，
+  /// 在 UI isolate 上同步遍历会直接卡住启动。
   Future<int> evictDiskCache({int maxSizeMB = 2048}) async {
-    final dir = Directory(_cacheDir);
-    if (!dir.existsSync()) return 0;
-
-    final files = <_FileEntry>[];
-    await for (final entity in dir.list(recursive: true)) {
-      if (entity is File) {
-        final stat = entity.statSync();
-        files.add(_FileEntry(entity, stat.size, stat.accessed));
-      }
-    }
-
-    var totalSize = files.fold<int>(0, (s, f) => s + f.size);
+    final dir = _cacheDir;
+    if (!Directory(dir).existsSync()) return 0;
     final maxBytes = maxSizeMB * 1024 * 1024;
-    var removed = 0;
-
-    // 按最后访问时间升序排列，优先删最旧的
-    files.sort((a, b) => a.accessed.compareTo(b.accessed));
-
-    for (final entry in files) {
-      if (totalSize <= maxBytes) break;
-      entry.file.deleteSync();
-      totalSize -= entry.size;
-      removed++;
+    try {
+      final removed =
+          await Isolate.run(() => _evictDiskCacheSync(dir, maxBytes));
+      if (removed > 0) {
+        logInfo('Thumbnail',
+            'Disk cache evicted $removed files (limit ${maxSizeMB}MB)');
+      }
+      return removed;
+    } catch (e) {
+      logWarn('Thumbnail', 'Disk cache eviction failed: $e');
+      return 0;
     }
-
-    return removed;
   }
 
   /// 清空全部内存缓存（GPU 纹理）
@@ -258,9 +305,35 @@ class ThumbnailService {
   }
 }
 
-class _FileEntry {
-  final File file;
-  final int size;
-  final DateTime accessed;
-  _FileEntry(this.file, this.size, this.accessed);
+/// 在后台 isolate 里扫描并清理缓存目录。
+///
+/// 必须是顶层函数：实例方法会把整个 service 一起捕获，跨 isolate 传不过去。
+int _evictDiskCacheSync(String cacheDir, int maxBytes) {
+  final dir = Directory(cacheDir);
+  if (!dir.existsSync()) return 0;
+
+  final files = <(File, int, DateTime)>[];
+  var totalSize = 0;
+  for (final entity in dir.listSync(recursive: true)) {
+    if (entity is! File) continue;
+    final stat = entity.statSync();
+    files.add((entity, stat.size, stat.accessed));
+    totalSize += stat.size;
+  }
+
+  // 按最后访问时间升序排列，优先删最旧的
+  files.sort((a, b) => a.$3.compareTo(b.$3));
+
+  var removed = 0;
+  for (final (file, size, _) in files) {
+    if (totalSize <= maxBytes) break;
+    try {
+      file.deleteSync();
+      totalSize -= size;
+      removed++;
+    } catch (_) {
+      // 单个文件删不掉（占用/权限）不影响其余清理
+    }
+  }
+  return removed;
 }

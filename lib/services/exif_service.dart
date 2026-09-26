@@ -88,10 +88,25 @@ class ExifData {
 
 /// EXIF 读取服务
 class ExifService {
+  /// 头部探测读取的字节数，覆盖全部常见 EXIF 段还有富余
+  static const int headerProbeBytes = 64 * 1024;
+
+  /// 只读文件头部，避免为几 KB 的 EXIF 把整张图读进内存
+  static Future<List<int>> _readHeader(File file) async {
+    final raf = await file.open();
+    try {
+      final length = await raf.length();
+      final count = length < headerProbeBytes ? length : headerProbeBytes;
+      return await raf.read(count);
+    } finally {
+      await raf.close();
+    }
+  }
+
   /// 从图片文件读取 EXIF 数据
   static Future<ExifData> read(String filePath) async {
     final file = File(filePath);
-    if (!file.existsSync()) {
+    if (!await file.exists()) {
       logWarn('Exif', 'File not found: $filePath');
       return const ExifData();
     }
@@ -102,8 +117,16 @@ class ExifService {
     }
 
     try {
-      final bytes = await file.readAsBytes();
-      final tags = await readExifFromBytes(bytes);
+      // EXIF 段在文件头部，先只读前 64KB 就够；整文件读取一张
+      // 24MP JPEG 要几十 MB 内存，而翻页时每张都会读一次。
+      Map<String, IfdTag> tags;
+      try {
+        tags = await readExifFromBytes(await _readHeader(file));
+      } catch (e) {
+        // 头部截断导致 IFD 越界等情况退回整文件
+        logDebug('Exif', 'Header-only EXIF parse failed, retrying full read: $e');
+        tags = await readExifFromBytes(await file.readAsBytes());
+      }
 
       double? gpsLat, gpsLon;
       try {

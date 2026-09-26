@@ -89,6 +89,7 @@ class _ImageGridState extends State<ImageGrid> {
           onTap: () => _handleImageTap(appState, img.id!),
           onDoubleTap: () => _openViewer(appState, i - folders.length),
           compact: true,
+          cacheEpoch: appState.thumbEpoch,
         );
       },
     );
@@ -112,6 +113,7 @@ class _ImageGridState extends State<ImageGrid> {
           onTap: () => _handleImageTap(appState, img.id!),
           onDoubleTap: () => _openViewer(appState, i - folders.length),
           compact: false,
+          cacheEpoch: appState.thumbEpoch,
         );
       },
     );
@@ -210,12 +212,16 @@ class _ThumbnailCard extends StatefulWidget {
   final VoidCallback onDoubleTap;
   final bool compact;
 
+  /// 缩略图缓存被清空时会自增；卡片靠它重新生成缩略图
+  final int cacheEpoch;
+
   const _ThumbnailCard({
     required this.image,
     required this.selected,
     required this.onTap,
     required this.onDoubleTap,
     required this.compact,
+    required this.cacheEpoch,
   });
 
   @override
@@ -225,12 +231,16 @@ class _ThumbnailCard extends StatefulWidget {
 class _ThumbnailCardState extends State<_ThumbnailCard> {
   bool _thumbReady = false;
 
+  /// 缩略图文件是否还没生成。由 [_checkAndGenerate] 异步确认，
+  /// build 里不再做任何文件系统调用。
+  bool _thumbMissing = true;
+
   /// 生成中的标记，避免 build 触发和 initState 触发撞在一起重复解码
   bool _generating = false;
 
-  /// 已经为哪个缩略图路径尝试过生成。
-  /// 生成失败时路径不变，靠它挡住 build 里每帧重试。
-  String? _attemptedPath;
+  /// 计算好的缩略图文件（路径要 stat 源文件拿 mtime，
+  /// 所以只在异步路径上算，build 里不碰文件系统）
+  File? _thumbFile;
 
   @override
   void initState() {
@@ -241,9 +251,10 @@ class _ThumbnailCardState extends State<_ThumbnailCard> {
   @override
   void didUpdateWidget(_ThumbnailCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.image.path != widget.image.path) {
+    if (oldWidget.image.path != widget.image.path ||
+        oldWidget.cacheEpoch != widget.cacheEpoch) {
       _thumbReady = false;
-      _attemptedPath = null;
+      _thumbMissing = true;
       _checkAndGenerate();
     }
   }
@@ -252,17 +263,28 @@ class _ThumbnailCardState extends State<_ThumbnailCard> {
     if (_generating) return;
     _generating = true;
     final path = widget.image.path;
+    // thumbPath 内部要 stat 源文件拿 mtime，所以只在异步路径上算
     final thumbPath = ThumbnailService.instance.thumbPath(path, size: 300);
     final thumbFile = File(thumbPath);
-    _attemptedPath = thumbPath;
     try {
-      if (!thumbFile.existsSync()) {
+      if (!await thumbFile.exists()) {
         await ThumbnailService.instance.ensureThumbnail(path, size: 300);
       }
-      if (mounted) setState(() => _thumbReady = true);
+      if (mounted) {
+        setState(() {
+          _thumbFile = thumbFile;
+          _thumbMissing = false;
+          _thumbReady = true;
+        });
+      }
     } catch (e) {
       logDebug('Grid', 'Thumbnail generate failed: $path ($e)');
-      if (mounted) setState(() => _thumbReady = false);
+      if (mounted) {
+        setState(() {
+          _thumbFile = thumbFile;
+          _thumbReady = false;
+        });
+      }
     } finally {
       _generating = false;
     }
@@ -272,21 +294,9 @@ class _ThumbnailCardState extends State<_ThumbnailCard> {
 
   @override
   Widget build(BuildContext context) {
-    final thumbPath =
-        ThumbnailService.instance.thumbPath(widget.image.path, size: 300);
-    final thumbFile = File(thumbPath);
-    final thumbMissing = !thumbFile.existsSync();
-
-    // 源文件内容变了，缩略图会落到带新 mtime 的文件名上。发现路径失效就补一次
-    // 生成：build 里不能 setState，推到下一帧。每个路径只补一次，
-    // 生成失败时路径不变，不会变成每帧重试。
-    if (thumbMissing && !_generating && _attemptedPath != thumbPath) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && !_generating && _attemptedPath != thumbPath) {
-          _checkAndGenerate();
-        }
-      });
-    }
+    // build 里不做 IO：路径、存在性都由 _checkAndGenerate 异步落进 State
+    final thumbFile = _thumbFile;
+    final canShowThumb = thumbFile != null && _thumbReady && !_thumbMissing;
 
     if (!widget.compact) {
       // 列表行
@@ -301,7 +311,7 @@ class _ThumbnailCardState extends State<_ThumbnailCard> {
               SizedBox(
                 width: 40,
                 height: 40,
-                child: _thumbReady && !thumbMissing
+                child: canShowThumb
                     ? Image.file(thumbFile, fit: BoxFit.cover,
                         errorBuilder: (_, __, ___) => _placeholder())
                     : _placeholder(),
@@ -346,7 +356,7 @@ class _ThumbnailCardState extends State<_ThumbnailCard> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            if (_thumbReady && !thumbMissing)
+            if (canShowThumb)
               Image.file(thumbFile, fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) => _placeholder())
             else

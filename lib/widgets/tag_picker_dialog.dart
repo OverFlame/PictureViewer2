@@ -76,8 +76,12 @@ class _TagPickerDialogState extends State<_TagPickerDialog> {
             ),
             const SizedBox(height: 8),
             Expanded(
-              child: ListView(
-                children: tags.map((t) {
+              // builder 只为可见行建 widget：一次性 toList 会为每个标签都建
+              // CheckboxListTile，标签多时打开对话框就卡。
+              child: ListView.builder(
+                itemCount: tags.length,
+                itemBuilder: (ctx, i) {
+                  final t = tags[i];
                   final label = t.namespace.isEmpty || t.namespace == 'general'
                       ? t.name
                       : '${t.namespace}:${t.name}';
@@ -96,7 +100,7 @@ class _TagPickerDialogState extends State<_TagPickerDialog> {
                         style: const TextStyle(fontSize: 12)),
                     secondary: _dot(t.color),
                   );
-                }).toList(),
+                },
               ),
             ),
           ],

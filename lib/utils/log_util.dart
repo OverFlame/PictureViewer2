@@ -48,11 +48,22 @@ class _LogUtil {
       ..write(' | ')
       ..write(msg);
 
+    // 原先 data 参数被整个丢掉：`logError('AppState', 'Import failed',
+    // e.toString())` 在日志里只剩「Import failed」，异常文本看不到。
+    StackTrace? stack;
+    if (data != null) {
+      if (data is Error) stack = data.stackTrace;
+      buf.write(' | $data');
+      if (stack != null) buf.write('\n$stack');
+    }
+
     try {
       dev.log(buf.toString(),
           name: 'PV2',
           level: level == Log.error ? 1000 : level == Log.warn ? 900 : level == Log.info ? 800 : 500,
-          time: DateTime.now());
+          time: DateTime.now(),
+          error: data,
+          stackTrace: stack);
     } catch (_) {
       // Fallback to print
       debugPrint(buf.toString());

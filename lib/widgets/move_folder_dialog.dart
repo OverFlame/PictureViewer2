@@ -41,6 +41,10 @@ class _MoveFolderDialogState extends State<MoveFolderDialog> {
 
   late final Map<int?, List<VirtualFolder>> _childrenMap;
 
+  /// DFS 预拍平的节点表（含缩进深度）：递归建 Column 会把整棵树一次性
+  /// 建出来，改用单层 ListView.builder 只为可见行建 widget。
+  late final List<_FlatFolder> _flat;
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +62,24 @@ class _MoveFolderDialogState extends State<MoveFolderDialog> {
     }
     _childrenMap.forEach((_, list) => list
         .sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase())));
+
+    _flat = _flatten();
+  }
+
+  List<_FlatFolder> _flatten() {
+    final out = <_FlatFolder>[];
+
+    void walk(VirtualFolder folder, int depth) {
+      out.add(_FlatFolder(folder, depth));
+      for (final child in _childrenMap[folder.id] ?? const <VirtualFolder>[]) {
+        walk(child, depth + 1);
+      }
+    }
+
+    for (final root in _childrenMap[null] ?? const <VirtualFolder>[]) {
+      walk(root, 0);
+    }
+    return out;
   }
 
   /// 自身 + 所有后代（不能作为移动目标，避免出现循环层级）
@@ -82,8 +104,6 @@ class _MoveFolderDialogState extends State<MoveFolderDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final roots = _childrenMap[null] ?? const <VirtualFolder>[];
-
     return AlertDialog(
       backgroundColor: Catppuccin.mantle,
       title: Text(
@@ -93,30 +113,42 @@ class _MoveFolderDialogState extends State<MoveFolderDialog> {
       content: SizedBox(
         width: 320,
         height: 380,
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _targetEntry(
-                name: '根级（顶层）',
-                icon: Icons.home_outlined,
-                depth: 0,
-                selected: _selectedParentId == null,
-                onTap: () => setState(() => _selectedParentId = null),
-              ),
-              const Divider(height: 1, color: Catppuccin.surface0),
-              if (roots.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text(
-                    '暂无可用目标文件夹',
-                    style: TextStyle(fontSize: 12, color: Catppuccin.overlay1),
-                  ),
-                )
-              else
-                for (final f in roots) _buildNode(f, 0),
-            ],
-          ),
+        child: Column(
+          children: [
+            _targetEntry(
+              name: '根级（顶层）',
+              icon: Icons.home_outlined,
+              depth: 0,
+              selected: _selectedParentId == null,
+              onTap: () => setState(() => _selectedParentId = null),
+            ),
+            const Divider(height: 1, color: Catppuccin.surface0),
+            Expanded(
+              child: _flat.isEmpty
+                  ? const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text(
+                        '暂无可用目标文件夹',
+                        style:
+                            TextStyle(fontSize: 12, color: Catppuccin.overlay1),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: EdgeInsets.zero,
+                      itemCount: _flat.length,
+                      itemBuilder: (ctx, i) {
+                        final node = _flat[i];
+                        return _targetEntry(
+                          name: node.folder.name,
+                          depth: node.depth,
+                          selected: _selectedParentId == node.folder.id,
+                          onTap: () => setState(
+                              () => _selectedParentId = node.folder.id),
+                        );
+                      },
+                    ),
+            ),
+          ],
         ),
       ),
       actions: [
@@ -128,22 +160,6 @@ class _MoveFolderDialogState extends State<MoveFolderDialog> {
           onPressed: _confirm,
           child: const Text('移动', style: TextStyle(color: Catppuccin.mauve)),
         ),
-      ],
-    );
-  }
-
-  Widget _buildNode(VirtualFolder folder, int depth) {
-    final children = _childrenMap[folder.id] ?? const <VirtualFolder>[];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _targetEntry(
-          name: folder.name,
-          depth: depth,
-          selected: _selectedParentId == folder.id,
-          onTap: () => setState(() => _selectedParentId = folder.id),
-        ),
-        for (final child in children) _buildNode(child, depth + 1),
       ],
     );
   }
@@ -191,4 +207,12 @@ class _MoveFolderDialogState extends State<MoveFolderDialog> {
       ),
     );
   }
+}
+
+/// DFS 拍平后的目标文件夹节点（[depth] 用于缩进）
+class _FlatFolder {
+  const _FlatFolder(this.folder, this.depth);
+
+  final VirtualFolder folder;
+  final int depth;
 }

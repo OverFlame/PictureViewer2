@@ -144,5 +144,64 @@ void main() {
       first.dispose();
       second.dispose();
     });
+    test('并发生成受全局闸门限制', () async {
+      // 8 张 600x600 的图并发请求：闸门是 3，峰值不该超过它，
+      // 但必须真的发生过并发（峰值 > 1），否则说明闸门把请求串行化了。
+      final files = [
+        for (var i = 0; i < 8; i++) writeImage('con$i.png', size: 600),
+      ];
+      service.peakConcurrentGenerations = 0;
+
+      final paths = await Future.wait(
+        files.map((f) => service.ensureThumbnail(f.path, size: 300)),
+      );
+
+      expect(service.peakConcurrentGenerations, lessThanOrEqualTo(
+          ThumbnailService.maxConcurrentGenerations));
+      expect(service.peakConcurrentGenerations, greaterThan(1));
+      for (final p in paths) {
+        expect(File(p).existsSync(), isTrue);
+      }
+    });
+
+    test('连续解码失败后仍然能继续生成（槽位有归还）', () async {
+      // 失败路径若不归还并发槽，闸门会被 3 次失败永久占满。
+      for (var i = 0; i < 5; i++) {
+        final bad = File('${srcDir.path}/bad$i.png')
+          ..writeAsStringSync('not an image');
+        await expectLater(
+          () => service.ensureThumbnail(bad.path, size: 300),
+          throwsA(anything),
+        );
+      }
+
+      final good = writeImage('after.png', size: 32);
+      final path = await service.ensureThumbnail(good.path, size: 300);
+      expect(File(path).existsSync(), isTrue);
+    });
+
+    test('生成过程不留下半截文件（先写 .tmp 再改名）', () async {
+      final f = writeImage('tmpcheck.png', size: 32);
+      await service.ensureThumbnail(f.path, size: 300);
+
+      final leftovers = cacheDir
+          .listSync(recursive: true)
+          .where((e) => e is File && e.path.contains('.tmp'))
+          .toList();
+      expect(leftovers, isEmpty);
+
+      // 解码失败时也不该留下 .tmp
+      final bad = File('${srcDir.path}/bad_tmp.png')
+        ..writeAsStringSync('not an image');
+      await expectLater(
+        () => service.ensureThumbnail(bad.path, size: 300),
+        throwsA(anything),
+      );
+      final after = cacheDir
+          .listSync(recursive: true)
+          .where((e) => e is File && e.path.contains('.tmp'))
+          .toList();
+      expect(after, isEmpty);
+    });
   });
 }

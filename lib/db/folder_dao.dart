@@ -232,6 +232,31 @@ class FolderDao {
     )).toList();
   }
 
+  /// 批量获取多个文件夹的路径（一次查询，避免逐文件夹往返）
+  Future<Map<int, List<FolderPath>>> getPathsForFolders(
+      List<int> folderIds) async {
+    if (folderIds.isEmpty) return {};
+    final map = <int, List<FolderPath>>{};
+    // SQLite 的变量上限默认 999，分批保证大批子树筛选也能走单次往返
+    const batchSize = 500;
+    for (var i = 0; i < folderIds.length; i += batchSize) {
+      final batch = folderIds.sublist(
+          i, i + batchSize > folderIds.length ? folderIds.length : i + batchSize);
+      final placeholders = batch.map((_) => '?').join(',');
+      final rows = await _db.query('folder_paths',
+          where: 'folder_id IN ($placeholders)', whereArgs: batch);
+      for (final r in rows) {
+        final fid = r['folder_id'] as int;
+        map.putIfAbsent(fid, () => []).add(FolderPath(
+          folderId: fid,
+          path: r['path'] as String,
+          recursive: (r['recursive'] as int) == 1,
+        ));
+      }
+    }
+    return map;
+  }
+
   /// 获取所有文件夹的所有路径（用于全库扫描去重）
   Future<Map<int, List<FolderPath>>> getAllPaths() async {
     final rows = await _db.query('folder_paths');
