@@ -37,7 +37,7 @@ void main() {
     await db.close();
   });
 
-  Future<void> add(String path) => dao.insert(ImageItem(
+  Future<int> add(String path) => dao.insert(ImageItem(
         path: path,
         filename: p.basename(path),
         addedAt: 0,
@@ -93,6 +93,24 @@ void main() {
     test('空列表返回空结果', () async {
       await add(r'D:\Photos\a.jpg');
       expect(await dao.queryByDirs(const []), isEmpty);
+    });
+  });
+
+  group('insert 命中既有路径', () {
+    test('同路径插入两次返回同一个非 0 id', () async {
+      final first = await add(r'D:\Photos\a.jpg');
+      expect(first, greaterThan(0));
+
+      final second = await add(r'D:\Photos\a.jpg');
+      expect(second, first);
+    });
+
+    test('重复插入不会多出一行', () async {
+      await add('/pics/a.jpg');
+      await add('/pics/a.jpg');
+
+      final rows = await dao.queryByDir('/pics');
+      expect(rows.length, 1);
     });
   });
 }

@@ -95,7 +95,6 @@ class ImportService {
       }
 
       // 2. 逐条写入数据库
-      final imageIds = <({int id, String path})>[];
       for (int i = 0; i < newPaths.length; i++) {
         final fp = newPaths[i];
         final file = File(fp);
@@ -116,7 +115,6 @@ class ImportService {
         );
 
         final fid = await _imageDao.insert(item);
-        imageIds.add((id: fid, path: fp));
 
         yield ImportProgress(
           current: i + 1,
@@ -162,8 +160,6 @@ class ImportService {
       }
 
       // 4. 批量写入数据库
-      final imageIds = <({int id, String path})>[];
-
       for (int i = 0; i < newPaths.length; i++) {
         final path = newPaths[i];
         final file = File(path);
@@ -186,7 +182,6 @@ class ImportService {
         );
 
         final fid = await _imageDao.insert(item);
-        imageIds.add((id: fid, path: path));
 
         yield ImportProgress(
           current: i + 1,

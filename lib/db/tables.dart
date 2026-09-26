@@ -2,7 +2,7 @@
 class Tables {
   Tables._();
 
-  static const int version = 3;
+  static const int version = 4;
 
   /// 所有建表 SQL（按依赖顺序）
   static const List<String> createStatements = [
@@ -24,9 +24,9 @@ class Tables {
     )
     ''',
 
-    // 图片路径索引
-    'CREATE INDEX IF NOT EXISTS idx_images_path ON images(path)',
+    // 图片索引：path 有 UNIQUE 约束，隐式索引已经够用，不再重复建
     'CREATE INDEX IF NOT EXISTS idx_images_hash ON images(hash)',
+    'CREATE INDEX IF NOT EXISTS idx_images_added_at ON images(added_at DESC)',
 
     // 标签表
     '''
@@ -49,6 +49,8 @@ class Tables {
       PRIMARY KEY (image_id, tag_id)
     )
     ''',
+    // 主键前导列是 image_id，按标签反查需要这条例外的索引
+    'CREATE INDEX IF NOT EXISTS idx_image_tags_tag ON image_tags(tag_id)',
 
     // 虚拟文件夹
     '''
@@ -68,6 +70,8 @@ class Tables {
       recursive INTEGER NOT NULL DEFAULT 1
     )
     ''',
+    // 原先没有 PK/UNIQUE，addPath 的 conflictAlgorithm.ignore 永不触发
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_folder_paths_uniq ON folder_paths(folder_id, path)',
 
     // 文件夹↔标签 多对多（文件夹可持有标签）
     '''
@@ -93,6 +97,23 @@ class Tables {
       )
       ''',
       "CREATE INDEX IF NOT EXISTS idx_folder_tags_tag ON folder_tags(tag_id)",
+    ],
+    // v4：补齐索引。新库与从老库升级的库必须落到同一组索引上，
+    // 所以这里的语句与 createStatements 保持一致。
+    4: [
+      // 建唯一索引前先清历史重复行（没有唯一约束时可能被写进去），
+      // 同一 (folder_id, path) 只保留 rowid 最小的那一行。
+      '''
+      DELETE FROM folder_paths
+      WHERE rowid NOT IN (
+        SELECT MIN(rowid) FROM folder_paths GROUP BY folder_id, path
+      )
+      ''',
+      // idx_images_path 与 path 的 UNIQUE 隐式索引重复，只增加写入开销
+      'DROP INDEX IF EXISTS idx_images_path',
+      'CREATE INDEX IF NOT EXISTS idx_image_tags_tag ON image_tags(tag_id)',
+      'CREATE INDEX IF NOT EXISTS idx_images_added_at ON images(added_at DESC)',
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_folder_paths_uniq ON folder_paths(folder_id, path)',
     ],
   };
 }

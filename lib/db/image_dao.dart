@@ -100,11 +100,23 @@ class ImageDao {
 
   // ═══ 单条操作 ═══
 
-  /// 插入一张图片（存在则忽略），返回 id
+  /// 插入一张图片（path 已存在则忽略），返回真实 id。
+  ///
+  /// 命中 path 唯一约束时 `insert` 返回 0，这里回读既有记录拿真实 id：
+  /// 导入进度与缩略图生成都按 id 回查，拿到 0 会查不到行。
   Future<int> insert(ImageItem image) async {
     final id = await _db.insert('images', image.toMap(),
         conflictAlgorithm: ConflictAlgorithm.ignore);
-    return id;
+    if (id != 0) return id;
+
+    final existing = await getByPath(image.path);
+    if (existing?.id != null) {
+      logDebug('ImageDao',
+          'insert skipped (path exists): reused id=${existing!.id} path=${image.path}');
+      return existing.id!;
+    }
+    logWarn('ImageDao', 'insert returned 0 but no row for path=${image.path}');
+    return 0;
   }
 
   /// 根据 id 查询

@@ -912,17 +912,24 @@ class AppState extends ChangeNotifier {
     return chain;
   }
 
-  /// 新建文件夹（parentId 为空则在根级创建）
-  Future<VirtualFolder> createFolder(String name, {int? parentId}) async {
-    final folder = await _folderDao.create(name, parentId: parentId);
-    logInfo('AppState', 'createFolder: "$name" parent=$parentId');
-    await _reloadFolderTree();
-    return folder;
+  /// 新建文件夹（parentId 为空则在根级创建）。
+  /// `created` 为 false 表示同父级下已有同名文件夹，返回的是既有记录。
+  Future<({VirtualFolder folder, bool created})> createFolder(String name,
+      {int? parentId}) async {
+    final existing = await _folderDao.findByName(name, parentId: parentId);
+    final folder =
+        existing ?? await _folderDao.create(name, parentId: parentId);
+    logInfo('AppState',
+        'createFolder: "$name" parent=$parentId created=${existing == null}');
+    if (existing == null) await _reloadFolderTree();
+    return (folder: folder, created: existing == null);
   }
 
-  Future<void> renameFolder(int id, String newName) async {
-    await _folderDao.rename(id, newName);
-    logInfo('AppState', 'renameFolder: #$id -> "$newName"');
+  /// 重命名文件夹。返回 false 表示同父级下已有同名文件夹，改动被拒绝
+  Future<bool> renameFolder(int id, String newName) async {
+    final ok = await _folderDao.rename(id, newName);
+    logInfo('AppState', 'renameFolder: #$id -> "$newName" ok=$ok');
+    if (!ok) return false;
     if (_currentFolderId == id) {
       _currentFolder = VirtualFolder(
           id: id, name: newName, parentId: _currentFolder?.parentId);
@@ -933,6 +940,7 @@ class AppState extends ChangeNotifier {
           .toList();
     }
     await _reloadFolderTree();
+    return true;
   }
 
   Future<void> deleteFolder(int id) async {
@@ -945,10 +953,13 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> moveFolder(int id, int? newParentId) async {
-    await _folderDao.move(id, newParentId);
-    logInfo('AppState', 'moveFolder: #$id -> parent=$newParentId');
+  /// 移动文件夹。返回 false 表示目标父级下已有同名文件夹，改动被拒绝
+  Future<bool> moveFolder(int id, int? newParentId) async {
+    final ok = await _folderDao.move(id, newParentId);
+    logInfo('AppState', 'moveFolder: #$id -> parent=$newParentId ok=$ok');
+    if (!ok) return false;
     await _reloadFolderTree();
+    return true;
   }
 
   Future<void> _reloadFolderTree() async {

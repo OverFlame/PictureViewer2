@@ -306,7 +306,13 @@ class _FolderPanelState extends State<FolderPanel> {
   Future<void> _createRootFolder(AppState appState) async {
     final name = await _promptFolderName('新建根文件夹');
     if (name == null || name.isEmpty) return;
-    await appState.createFolder(name);
+    final result = await appState.createFolder(name);
+    if (!mounted) return;
+    if (!result.created) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已有同名文件夹「$name」，用现有那个')),
+      );
+    }
   }
 
   void _addFromPath(AppState appState) {
@@ -464,19 +470,30 @@ class _FolderTreeNodeState extends State<_FolderTreeNode> {
   Future<void> _createChildFolder(AppState appState) async {
     final name = await _promptName('新建子文件夹');
     if (name == null || name.isEmpty) return;
-    await appState.createFolder(name, parentId: widget.folder.id);
-    if (mounted) {
-      _children = null;
-      _expanded = true;
-      _loadChildren();
+    final result =
+        await appState.createFolder(name, parentId: widget.folder.id);
+    if (!mounted) return;
+    if (!result.created) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已有同名子文件夹「$name」，用现有那个')),
+      );
     }
+    _children = null;
+    _expanded = true;
+    _loadChildren();
   }
 
   Future<void> _rename(AppState appState) async {
     final name =
         await _promptName('重命名文件夹', initial: widget.folder.name);
     if (name == null || name.isEmpty) return;
-    await appState.renameFolder(widget.folder.id!, name);
+    final ok = await appState.renameFolder(widget.folder.id!, name);
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('同一层级下已有文件夹叫「$name」')),
+      );
+    }
   }
 
   Future<void> _delete(AppState appState) async {
@@ -512,7 +529,13 @@ class _FolderTreeNodeState extends State<_FolderTreeNode> {
     );
     if (target == null || !mounted) return; // 取消
     final newParentId = target == kMoveToRoot ? null : target;
-    await appState.moveFolder(widget.folder.id!, newParentId);
+    final ok = await appState.moveFolder(widget.folder.id!, newParentId);
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('目标位置已有同名文件夹，未移动')),
+      );
+    }
   }
 
   Future<String?> _promptName(String title, {String? initial}) {
