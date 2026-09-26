@@ -44,18 +44,35 @@
 
 ### 构建
 
+用仓库自带的脚本构建，脚本会处理 sqlite3 原生库的来源（见下）。
+
 ```bash
-# 安装依赖
-flutter pub get
+# Linux：产物在 build/linux/<架构>/release/bundle/
+scripts/build_linux.sh                  # 发布构建
+scripts/build_linux.sh --mode debug     # 调试构建
+scripts/build_linux.sh --clean          # 先执行 flutter clean
 
-# 开发运行
-flutter run -d windows   # 或 flutter run -d linux
-
-# 发布构建
-flutter build windows    # 或 flutter build linux
+# Windows：产物在 build\windows\<架构>\runner\Release\
+pwsh -File scripts\build_windows.ps1
 ```
 
-Windows 构建产物位于 `build/windows/x64/runner/Release/`，Linux 产物位于 `build/linux/x64/release/bundle/`。
+开发运行仍用 `flutter run -d linux` / `flutter run -d windows`。
+
+两个脚本的日志写在 `<仓库根>/logs/`（可用环境变量 `APP_LOG_DIR` 改位置），
+全部参数见 `scripts/build_linux.sh --help` 与 `scripts/build_windows.ps1` 头部注释。
+
+#### 关于 sqlite3 原生库
+
+`sqlite3` 包的构建钩子默认从 GitHub Releases 下载预编译库，网络不通时报
+`SocketException: Connection timed out ... address = github.com` 并让整个构建失败。因此：
+
+- **Linux** 脚本默认 `--sqlite system`：构建时临时往 `pubspec.yaml` 追加
+  `hooks.user_defines.sqlite3.source: system`，构建结束（含被中断）后自动还原。
+  这条路径要求系统里存在可被 `dlopen("libsqlite3.so")` 命中的库
+  （Debian / Ubuntu 上装 `libsqlite3-dev`），脚本会把它复制进产物 `bundle/lib/`，
+  目标机不需要再装。想走下载则加 `--sqlite download`。
+- **Windows** 脚本默认 `-Sqlite download`：Windows 没有系统 `sqlite3.dll`，仍走下载。
+  先配好代理再重试，或自备 `sqlite3.dll` 并把 `hooks` 段的 `source` 写成 `windows: sqlite3`。
 
 ## 项目结构
 
