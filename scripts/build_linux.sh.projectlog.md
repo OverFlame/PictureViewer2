@@ -36,3 +36,33 @@
     脚本在退出时还原，所以构建实际用的版本与仓库 lock 固定的版本可能不同。
   - `--sqlite system` 要求系统里有 `libsqlite3.so`；本机靠 `~/.local/lib/libsqlite3.so` 软链，
     干净的 Debian/Ubuntu 需要装 `libsqlite3-dev`。
+
+## 2026-09-26 批次 6 配套：仓库 pubspec 常驻 hooks 段后的两处修正
+
+- 起因：批次 6 把 `hooks.user_defines.sqlite3.source`（平台映射：windows `sqlite3` / linux `system` / macos `system`）
+  写进了仓库 `pubspec.yaml` 并提交，好让干净检出直接能跑 `flutter test`。这会改变本脚本的前提：
+  `patch_pubspec_for_sqlite()` 原来见到 `^hooks:` 就 `return 0`，于是两点行为变了。
+- 修正一（真问题）：`--sqlite download` 被静默忽略。这个选项原本靠「临时追加 hooks 段」生效；
+  仓库段常驻之后走的是「沿用」分支，用户显式要 download 也还是用仓库里的 `linux: system`，没有任何提示。
+  现在显式 `--sqlite download` 且仓库已有 hooks 段时，用
+  `sed -E 's/^([[:space:]]*)linux:[[:space:]]*system[[:space:]]*$/\1linux: download/'` 只改 linux 那一行，
+  仍走原有的 `BACKUP_DIR` + `PATCHED` + EXIT trap 还原；找不到 `linux: system` 那一行则报错退出（码 2），不静默放过。
+- 修正二（顺带）：`system` 分支的 `find_libsqlite3_so` 预检原来在 `^hooks:` 提前返回之后，被跳过了；
+  构建后第 226 行还会再调一次，失败时是 `install` 的空参数报错，很难看懂。现在把预检提到函数最前面，
+  不管走哪条分支都先检，缺库时仍按原样退出（码 3）并提示装 `libsqlite3-dev` 或改用 `--sqlite download`。
+- 动作：改 `scripts/build_linux.sh`（`patch_pubspec_for_sqlite`、`--sqlite` 帮助文本、`usage()` 的
+  `sed -n '3,20p'` → `'3,21p'`）；本文件追加；`pubspec.yaml` 与另一个脚本未动。
+- 验证（2026-09-26，全部在 `/tmp/b6fix` 副本里跑，用假 `flutter` 记录它实际看到的 pubspec）：
+  - `bash -n scripts/build_linux.sh` 通过；`--help` 输出仍完整（新增的那行帮助没被 `usage()` 截掉）。
+  - 用例 1：仓库 pubspec + `--sqlite download --no-pub`。构建调用时 pubspec 里是 `linux: download`，
+    退出后 `sha256sum` 与运行前一致（还原成功），日志有「已临时把 pubspec.yaml hooks 段里的 linux 来源改为 download」。
+  - 用例 2：仓库 pubspec + 默认（system）。日志有「系统 sqlite3：/home/hoshi/.local/lib/libsqlite3.so」与
+    「已有 hooks 段，沿用」，假 flutter 两次调用都没看到 `linux: download`，pubspec 未被改动。
+  - 用例 3：去掉 hooks 段的旧式 pubspec + `--sqlite download`。走的还是追加分支，
+    日志为「已临时写入 hooks.user_defines.sqlite3.source=download」，退出后与旧式文件逐字节相同。
+  - 用例 4：hooks 段里把 `linux: system` 改成 `linux: download` 后再传 `--sqlite download`。
+    退出码 2，日志给出「没找到 'linux: system' 那一行」与手工处置办法，文件未被改动。
+  - 四个用例的退出码都是 5 或缺库码之外的那个预期值（脚手架假 flutter 不产出 bundle，到产物检查就停），
+    与本条修正无关。
+- 已知缺口（未变）：`--sqlite download` 的**真实下载**路径仍未验证（本机到 github.com 不通），
+  本次只验证了「脚本有没有把 linux 那一行改成 download」。`--mode debug/profile`、`--clean` 仍未逐一跑过。

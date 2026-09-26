@@ -7,7 +7,8 @@
 #
 # 选项：
 #   --mode <release|debug|profile>  构建模式，默认 release
-#   --sqlite <system|download>      sqlite3 来源，默认 system（用系统 libsqlite3，不访问 GitHub）
+#   --sqlite <system|download>      sqlite3 来源，默认 system（用系统 libsqlite3，不访问 GitHub）；
+#                                   download 会把仓库 pubspec 里 linux 那一行临时改成 download
 #   --clean                         构建前执行 flutter clean
 #   --no-pub                        跳过 flutter pub get
 #   -h, --help                      显示本帮助
@@ -32,7 +33,7 @@ DO_CLEAN=0
 DO_PUB=1
 
 usage() {
-  sed -n '3,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '3,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -136,10 +137,6 @@ find_libsqlite3_so() {  # 打印 dlopen("libsqlite3.so") 能命中的路径
 }
 
 patch_pubspec_for_sqlite() {
-  if grep -qE '^hooks:' "$PUBSPEC"; then
-    log_info "pubspec.yaml 已有 hooks 段，沿用其中的 sqlite3 配置"
-    return 0
-  fi
   if [ "$SQLITE_SOURCE" = "system" ]; then
     local found=""
     if found="$(find_libsqlite3_so)"; then
@@ -149,6 +146,27 @@ patch_pubspec_for_sqlite() {
       log_error "处置：安装 libsqlite3-dev，或改用 --sqlite download（需要能访问 GitHub）。"
       exit 3
     fi
+  fi
+  if grep -qE '^hooks:' "$PUBSPEC"; then
+    if [ "$SQLITE_SOURCE" != "download" ]; then
+      log_info "pubspec.yaml 已有 hooks 段，沿用其中的 sqlite3 配置"
+      return 0
+    fi
+    # 仓库里的 hooks 段按平台写，linux 那一行是 system。显式要 download 时把它临时改成 download。
+    if ! grep -qE '^[[:space:]]+linux:[[:space:]]*system[[:space:]]*$' "$PUBSPEC"; then
+      log_error "pubspec.yaml 有 hooks 段，但没找到 'linux: system' 那一行，无法临时切成 download。"
+      log_error "处置：手工把 hooks.user_defines.sqlite3.source 里的 linux 改成 download，或删掉整个 hooks 段后重试。"
+      exit 2
+    fi
+    BACKUP_DIR="$(mktemp -d)"
+    cp -f "$PUBSPEC" "${BACKUP_DIR}/pubspec.yaml"
+    if [ -f "$LOCKFILE" ]; then
+      cp -f "$LOCKFILE" "${BACKUP_DIR}/pubspec.lock"
+    fi
+    sed -i -E 's/^([[:space:]]*)linux:[[:space:]]*system[[:space:]]*$/\1linux: download/' "$PUBSPEC"
+    PATCHED=1
+    log_warn "已临时把 pubspec.yaml hooks 段里的 linux 来源改为 download，构建结束后还原 pubspec.yaml 与 pubspec.lock"
+    return 0
   fi
   BACKUP_DIR="$(mktemp -d)"
   cp -f "$PUBSPEC" "${BACKUP_DIR}/pubspec.yaml"
