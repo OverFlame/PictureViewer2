@@ -4,12 +4,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import '../utils/file_io.dart';
 import '../utils/log_util.dart';
 import 'data_dir_service.dart';
 
 /// 持久化设置服务（JSON 文件，位于数据目录 settings.json）。
 ///
 /// 存储位置跟随 [DataDirService]，因此「数据位置迁移」会一并迁移设置。
+/// 写入统一走 [AtomicFileWriter]：并发调用按顺序排队，每次原子替换，
+/// 不会写出半截 JSON；上一份内容保留为 `settings.json.bak` 作为回退点。
 class SettingsService {
   SettingsService._();
 
@@ -17,28 +20,49 @@ class SettingsService {
 
   Map<String, dynamic> _data = {};
 
+  AtomicFileWriter? _writer;
+
   Future<File> _file() async {
     return File(p.join(await DataDirService.instance.dataDir, 'settings.json'));
   }
 
   /// 初始化（App 启动时调用一次）
+  ///
+  /// 主文件读不出来时回退到 `settings.json.bak`，两者都不可用才使用默认值。
   Future<void> init() async {
     final f = await _file();
-    if (f.existsSync()) {
-      try {
-        _data = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
-      } catch (e) {
-        logWarn('Settings', '解析 settings.json 失败: $e');
-        _data = {};
-      }
-    }
-    logInfo('Settings', 'Initialized OK');
+    final data = await _readJson(f) ??
+        await _readJson(File('${f.path}.bak')) ??
+        <String, dynamic>{};
+    _data = data;
+    logInfo('Settings', 'Initialized OK (${data.length} keys)');
   }
 
+  /// 读取并解析 JSON 对象，任何异常都只记日志并返回 null。
+  Future<Map<String, dynamic>?> _readJson(File f) async {
+    if (!f.existsSync()) return null;
+    try {
+      final decoded = jsonDecode(await f.readAsString());
+      if (decoded is Map<String, dynamic>) return decoded;
+      logWarn('Settings', '内容不是 JSON 对象: ${f.path}');
+    } catch (e) {
+      logWarn('Settings', '解析失败: ${f.path} ($e)');
+    }
+    return null;
+  }
+
+  /// 保存设置。
+  ///
+  /// 数据目录迁移后目标路径会变，路径不同就换一个写入器，
+  /// 同时意味着从一条新的排队链条开始。
   Future<void> _save() async {
     final f = await _file();
-    await f.parent.create(recursive: true);
-    await f.writeAsString(jsonEncode(_data));
+    var writer = _writer;
+    if (writer == null || writer.path != f.path) {
+      writer = AtomicFileWriter(f.path);
+      _writer = writer;
+    }
+    await writer.write(jsonEncode(_data));
   }
 
   // ═══════════════ 主题 ═══════════════

@@ -13,6 +13,7 @@ import '../services/settings_service.dart';
 import '../services/thumbnail_cache.dart';
 import '../utils/filter_expression.dart';
 import '../utils/log_util.dart';
+import '../utils/path_util.dart';
 
 /// 标签筛选规则
 class TagFilter {
@@ -758,12 +759,24 @@ class AppState extends ChangeNotifier {
   Future<String> getDataDir() => DataDirService.instance.dataDir;
 
   /// 迁移数据目录到 [newDir]，随后重开数据库/缩略图并刷新。
+  ///
+  /// 目标与当前目录相同的位置直接拒绝，此时连数据库都不关。
+  /// 迁移本身失败时不吞异常：数据库与缩略图在 finally 里重新指回
+  /// 当前（仍是旧的）数据目录，应用不会停在一个已关闭的数据库上。
   Future<void> migrateDataDir(String newDir) async {
+    final oldDir = await DataDirService.instance.dataDir;
+    if (isSamePath(oldDir, newDir)) {
+      throw ArgumentError.value(
+          newDir, 'newDir', '目标目录与当前数据目录相同，无需迁移');
+    }
     // 先关闭数据库，确保 WAL 合并后 pv2.db 完整一致
     await DatabaseManager.instance.close();
-    await DataDirService.instance.migrateTo(newDir);
-    await DatabaseManager.instance.init();
-    await ThumbnailService.instance.init();
+    try {
+      await DataDirService.instance.migrateTo(newDir);
+    } finally {
+      await DatabaseManager.instance.init();
+      await ThumbnailService.instance.init();
+    }
     await loadSettings();
     await loadTags();
     await loadFolders();
@@ -785,27 +798,17 @@ class AppState extends ChangeNotifier {
   // ═══════════════ 导出 / 分享 ═══════════════
 
   /// 拷贝当前选中图片到指定目录
+  ///
+  /// 同名冲突时生成 `name_(n).ext`，候选名由 [uniqueDestPath] 逐个真实探测；
+  /// 目标落在源目录里时也不会把文件当成自己的目标。
   Future<String?> copySelectedImageTo(String destDir) async {
     final img = selectedImage;
     if (img == null) return null;
     final src = io.File(img.path);
     if (!await src.exists()) return null;
 
-    final name = img.filename;
-    final destPath = '$destDir${io.Platform.pathSeparator}$name';
-    final dest = io.File(destPath);
-
-    // 如果存在同名文件，自动加序号
-    int counter = 1;
-    String finalPath = destPath;
-    while (await dest.exists()) {
-      final dot = name.lastIndexOf('.');
-      final base = dot > 0 ? name.substring(0, dot) : name;
-      final ext = dot > 0 ? name.substring(dot) : '';
-      finalPath = '$destDir${io.Platform.pathSeparator}${base}_($counter)$ext';
-      counter++;
-    }
-
+    final finalPath =
+        await uniqueDestPath(destDir: destDir, name: img.filename);
     await src.copy(finalPath);
     logInfo('AppState', 'Copied to $finalPath');
     return finalPath;

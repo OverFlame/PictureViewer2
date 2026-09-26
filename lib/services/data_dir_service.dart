@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../utils/file_io.dart';
 import '../utils/log_util.dart';
+import '../utils/path_util.dart';
 
 /// 数据目录服务：统一管理数据库 / 缩略图 / 设置文件的根目录。
 ///
@@ -66,14 +68,22 @@ class DataDirService {
 
   /// 更换数据目录并迁移现有数据（数据库 / 缩略图 / 设置）。
   /// 旧目录保留（不删除），返回新目录路径。
+  ///
+  /// 目标落在当前数据目录上时直接抛 [ArgumentError]。这种迁移没有意义，
+  /// 而且复制会命中「源与目标相同」的分支，把数据库与设置清空。
+  /// 迁移过程中任何一步失败都会抛出，`_dataDir` 保持指向旧目录。
   Future<String> migrateTo(String newDir) async {
     final oldDir = await dataDir;
     final newD = p.normalize(newDir);
+    if (isSamePath(oldDir, newD)) {
+      throw ArgumentError.value(
+          newDir, 'newDir', '目标目录与当前数据目录相同，无需迁移');
+    }
     await Directory(newD).create(recursive: true);
 
     // 迁移文件（copy 而非 move，旧数据保留，避免迁移失败丢数据）
-    await _copyFileIfExists(p.join(oldDir, 'pv2.db'), p.join(newD, 'pv2.db'));
-    await _copyFileIfExists(
+    await safeCopyFile(p.join(oldDir, 'pv2.db'), p.join(newD, 'pv2.db'));
+    await safeCopyFile(
         p.join(oldDir, 'settings.json'), p.join(newD, 'settings.json'));
     await _copyDir(
         p.join(oldDir, 'thumbnails'), p.join(newD, 'thumbnails'));
@@ -88,22 +98,15 @@ class DataDirService {
     return newD;
   }
 
-  Future<void> _copyFileIfExists(String src, String dst) async {
-    final s = File(src);
-    if (!s.existsSync()) return;
-    await File(dst).parent.create(recursive: true);
-    await s.copy(dst);
-  }
-
+  /// 递归复制目录，每个文件走 [safeCopyFile] 的「先临时文件再改名」路径。
   Future<void> _copyDir(String src, String dst) async {
     final s = Directory(src);
     if (!s.existsSync()) return;
+    if (isSamePath(src, dst)) return;
     await for (final entity in s.list(recursive: true)) {
       if (entity is File) {
         final rel = p.relative(entity.path, from: src);
-        final target = File(p.join(dst, rel));
-        await target.parent.create(recursive: true);
-        await entity.copy(target.path);
+        await safeCopyFile(entity.path, p.join(dst, rel));
       }
     }
   }

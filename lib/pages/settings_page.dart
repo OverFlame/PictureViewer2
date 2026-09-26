@@ -448,10 +448,14 @@ class SettingsDialog extends StatelessWidget {
       ),
     );
     if (confirmed != true || !context.mounted) return;
-    await appState.migrateDataDir(dir);
-    if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('数据已迁移')));
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await appState.migrateDataDir(dir);
+      messenger.showSnackBar(const SnackBar(content: Text('数据已迁移')));
+    } catch (e) {
+      logError('Settings', '迁移数据目录失败', e);
+      final detail = e is ArgumentError ? '${e.message}' : '$e';
+      messenger.showSnackBar(SnackBar(content: Text('迁移失败：$detail')));
     }
   }
 
