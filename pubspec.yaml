@@ -98,3 +98,14 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# sqlite3 原生库的来源。写成平台映射而不是标量 `system`，否则 Windows 上
+# 会去找系统 sqlite3.dll 而失败（见 scripts/build_windows.ps1）。
+# 有了这一段，干净检出的仓库可以直接 `flutter test`，不必再临时改 pubspec。
+hooks:
+  user_defines:
+    sqlite3:
+      source:
+        windows: sqlite3
+        linux: system
+        macos: system
