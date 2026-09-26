@@ -72,3 +72,6 @@ history.md
 
 # Temp build debug files
 build_err*.txt
+
+# 转移包输出（本地产物，不入库）
+dist/
