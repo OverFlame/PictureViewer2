@@ -201,18 +201,23 @@ class ImageDao {
     return rows.map(ImageItem.fromMap).toList();
   }
 
-  /// 查询某路径前缀下的所有图片
+  /// 查询某路径前缀下的所有图片。
+  ///
+  /// 前缀必须带上目录分隔符（见 [_directPrefix]）：只写 `D:\Photos%` 会连
+  /// `D:\Photos2024\a.jpg` 一起命中，而递归加标签走的就是这条查询。
   Future<List<ImageItem>> queryByDir(String dirPath) async {
+    final (prefix, _) = _directPrefix(dirPath);
     final rows = await _db.query('images',
-        where: 'path LIKE ?', whereArgs: ['$dirPath%']);
+        where: 'path LIKE ?', whereArgs: ['$prefix%']);
     return rows.map(ImageItem.fromMap).toList();
   }
 
   /// 匹配多个路径前缀中的图片（用于虚拟文件夹）
   Future<List<ImageItem>> queryByDirs(List<String> dirPaths) async {
     if (dirPaths.isEmpty) return [];
-    final conditions = dirPaths.map((_) => 'path LIKE ?').join(' OR ');
-    final args = dirPaths.map((p) => '$p%').toList();
+    final prefixes = dirPaths.map((d) => _directPrefix(d).$1).toList();
+    final conditions = prefixes.map((_) => 'path LIKE ?').join(' OR ');
+    final args = prefixes.map((p) => '$p%').toList();
     final rows =
         await _db.query('images', where: conditions, whereArgs: args);
     return rows.map(ImageItem.fromMap).toList();

@@ -329,9 +329,10 @@ class _TagPanelState extends State<TagPanel> {
             appState.toggleNotFilter(tag.id!);
             break;
           case 'clear':
-            appState.toggleAndFilter(tag.id!);
-            appState.toggleOrFilter(tag.id!);
-            appState.toggleNotFilter(tag.id!);
+            // 一次移除该标签在 AND / OR / NOT 里的全部痕迹。
+            // 不能连调三个 toggle：第二个会把刚移除的标签加回来，
+            // 终态固定变成「排除该标签」。
+            appState.clearTagFilterFor(tag.id!);
             break;
           case 'edit':
             _showEditDialog(tag, appState);

@@ -26,8 +26,11 @@ Color parseHexColor(String? hex, {Color fallback = const Color(0xFFCBA6F7)}) {
   if (s.length == 8) {
     final v = int.tryParse(s, radix: 16);
     if (v == null) return fallback;
+    // 与 colorToHex 的写出顺序保持一致：RRGGBBAA（CSS 风格）。
+    // 这里曾经按 AARRGGBB 读，等于把 alpha 与红通道对调：
+    // 选好的半透明颜色存进库里是对的，界面显示与 hex 输入框回填却是错的。
     return Color.fromARGB(
-        (v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+        v & 0xFF, (v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF);
   }
   return fallback;
 }

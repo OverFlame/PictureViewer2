@@ -35,9 +35,10 @@ class _ImageDetailState extends State<ImageDetail> {
     // 选中图片变化时，重新加载 EXIF（延后到帧后，避免 build 期间 setState）
     if (image != null && image.id != _lastImageId) {
       _lastImageId = image.id;
+      final requestId = image.id;
       final path = image.path;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _loadExif(path);
+        if (mounted) _loadExif(requestId, path);
       });
     } else if (image == null && _lastImageId != null) {
       _lastImageId = null;
@@ -101,17 +102,18 @@ class _ImageDetailState extends State<ImageDetail> {
   }
 
   // ── EXIF 信息 ──
-  void _loadExif(String path) {
+  void _loadExif(int? requestId, String path) {
     setState(() => _exifLoading = true);
     _exifData = null;
     ExifService.read(path).then((data) {
-      if (mounted) {
-        setState(() {
-          _exifData = data;
-          _exifLoading = false;
-        });
-        logDebug('Detail', 'EXIF loaded for id=$_lastImageId: hasData=${data.hasData}');
-      }
+      // 读 EXIF 期间用户可能已经切到别的图：回包时确认请求仍属于当前选中的图，
+      // 否则会把上一张的 EXIF 显示到新图上。
+      if (!mounted || requestId != _lastImageId) return;
+      setState(() {
+        _exifData = data;
+        _exifLoading = false;
+      });
+      logDebug('Detail', 'EXIF loaded for id=$_lastImageId: hasData=${data.hasData}');
     });
   }
 
@@ -442,23 +444,24 @@ class _ImagePreviewState extends State<_ImagePreview> {
   }
 
   Future<void> _load() async {
+    // 缩略图生成是异步的，期间 widget.image 可能已经换过。
+    // 回包时比对目标路径，否则旧预览会写到新图上（过期 future）。
+    final target = widget.image.path;
     try {
       final path = await ThumbnailService.instance
-          .ensureThumbnail(widget.image.path, size: 800);
-      if (mounted) {
-        setState(() {
-          _previewPath = path;
-          _loading = false;
-        });
-      }
+          .ensureThumbnail(target, size: 800);
+      if (!mounted || target != widget.image.path) return;
+      setState(() {
+        _previewPath = path;
+        _loading = false;
+      });
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _failed = true;
-        });
-      }
-      logDebug('Detail', 'Preview load failed: ${widget.image.path} ($e)');
+      if (!mounted || target != widget.image.path) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+      logDebug('Detail', 'Preview load failed: $target ($e)');
     }
   }
 
@@ -562,15 +565,17 @@ class _TagEditorState extends State<_TagEditor> {
   }
 
   Future<void> _loadTags() async {
+    final requestId = widget.imageId;
     setState(() => _loading = true);
     final appState = context.read<AppState>();
-    final tags = await appState.getImageTags(widget.imageId);
-    if (mounted) {
-      setState(() {
-        _imageTags = tags;
-        _loading = false;
-      });
-    }
+    final tags = await appState.getImageTags(requestId);
+    // 查询期间 imageId 可能已经换过（didUpdateWidget 会另起一次加载），
+    // 过期结果不能覆盖新图的数据。
+    if (!mounted || requestId != widget.imageId) return;
+    setState(() {
+      _imageTags = tags;
+      _loading = false;
+    });
   }
 
   @override
@@ -632,7 +637,8 @@ class _TagEditorState extends State<_TagEditor> {
                     const SizedBox(width: 2),
                     GestureDetector(
                       onTap: () {
-                        appState.toggleTagOnSelected(tag);
+                        // 用面板自己的 imageId 提交，不用「当前选中」的隐式上下文。
+                        appState.toggleTagOnImage(widget.imageId, tag);
                         setState(() {
                           bound.removeWhere((t) => t.id == tag.id);
                         });
@@ -739,7 +745,8 @@ class _TagEditorState extends State<_TagEditor> {
                                         style: const TextStyle(fontSize: 10))
                                     : null,
                                 onTap: () {
-                                  appState.toggleTagOnSelected(tag);
+                                  appState.toggleTagOnImage(
+                                      widget.imageId, tag);
                                   Navigator.pop(ctx);
                                   _loadTags();
                                 },
@@ -766,7 +773,7 @@ class _TagEditorState extends State<_TagEditor> {
                       onTap: () async {
                         final tag = await appState.createTag(
                             searchCtrl.text.trim());
-                        appState.toggleTagOnSelected(tag);
+                        appState.toggleTagOnImage(widget.imageId, tag);
                         if (mounted) Navigator.pop(ctx);
                         _loadTags();
                       },

@@ -29,6 +29,19 @@ class TagFilter {
 
   bool get active =>
       andTagIds.isNotEmpty || orTagIds.isNotEmpty || notTagIds.isNotEmpty;
+
+  /// 该标签是否参与本筛选（AND / OR / NOT 任一）。
+  bool contains(int tagId) =>
+      andTagIds.contains(tagId) ||
+      orTagIds.contains(tagId) ||
+      notTagIds.contains(tagId);
+
+  /// 把该标签从三个集合里一次性移除，其余保持不变。
+  TagFilter withoutTag(int tagId) => TagFilter(
+        andTagIds: andTagIds.where((id) => id != tagId).toList(),
+        orTagIds: orTagIds.where((id) => id != tagId).toList(),
+        notTagIds: notTagIds.where((id) => id != tagId).toList(),
+      );
 }
 
 class AppState extends ChangeNotifier {
@@ -418,9 +431,12 @@ class AppState extends ChangeNotifier {
     return tags;
   }
 
-  Future<void> toggleTagOnSelected(Tag tag) async {
-    final imageId = _selectedId;
-    if (imageId == null) return;
+  /// 按显式 [imageId] 增删标签关联。
+  ///
+  /// 详情面板必须用这个入口：面板渲染的是它自己 [imageId] 对应的标签，
+  /// 而 `_selectedId` 是「当前选中」这个会被其它交互改写的隐式上下文；
+  /// 两者在快速切换时会错位，把改动落到另一张图上。
+  Future<void> toggleTagOnImage(int imageId, Tag tag) async {
     final current =
         _imageTags[imageId] ?? await _tagDao.getTagsForImage(imageId);
     final has = current.any((t) => t.id == tag.id);
@@ -493,14 +509,23 @@ class AppState extends ChangeNotifier {
   }
 
   void _removeFromFilter(int tagId) {
-    _tagFilter = TagFilter(
-      andTagIds: _tagFilter.andTagIds.where((id) => id != tagId).toList(),
-      orTagIds: _tagFilter.orTagIds.where((id) => id != tagId).toList(),
-      notTagIds: _tagFilter.notTagIds.where((id) => id != tagId).toList(),
-    );
+    _tagFilter = _tagFilter.withoutTag(tagId);
   }
 
   // ── 标签筛选切换 ──
+
+  /// 清除某个标签在简单筛选里的全部痕迹（AND / OR / NOT 三处一起移除）。
+  ///
+  /// TAG 面板的「清除此标签筛选」必须走这里。前面曾用
+  /// `toggleAndFilter` + `toggleOrFilter` + `toggleNotFilter` 连调三次：
+  /// 后一个 toggle 会把前一个刚移除的标签重新加进另一个集合，
+  /// 终态固定变成「排除该标签」，与按钮名字正好相反。
+  void clearTagFilterFor(int tagId) {
+    if (!_tagFilter.contains(tagId)) return;
+    _tagFilter = _tagFilter.withoutTag(tagId);
+    logInfo('AppState', 'Tag filter cleared for tag $tagId');
+    refresh();
+  }
 
   void toggleAndFilter(int tagId) {
     _advancedFilter = ''; // 与高级筛选互斥

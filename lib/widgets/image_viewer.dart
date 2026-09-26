@@ -369,6 +369,14 @@ class _ImageViewerState extends State<ImageViewer> {
   }
 
   Widget _buildErrorWidget(String message) {
+    // 文件缺失与解码失败两条路径都不会走到 frameBuilder，那只在 frameBuilder
+    // 里的复位永远不会执行，「加载中」遮罩会一直盖住这条错误提示。
+    // 这里补一个复位点，与 frameBuilder 里的复位互不冲突（都是置 false）。
+    if (_isImageLoading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _isImageLoading) setState(() => _isImageLoading = false);
+      });
+    }
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
