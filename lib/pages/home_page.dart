@@ -23,6 +23,20 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  /// 左右面板的目标宽度
+  static const double _leftPanelWidth = 280;
+  static const double _rightPanelWidth = 320;
+
+  /// 中央区域要保住的最小宽度。窗口不够时按比例压缩两侧面板去腾这块地方，
+  /// 否则两侧固定宽度加起来会把中央挤成负数，顶部工具栏先报 overflow。
+  static const double _minCenterWidth = 320;
+
+  /// 面板被压到这么窄就别留了：半个面板既看不清内容，里面的行也放不下。
+  static const double _minPanelWidth = 150;
+
+  /// 两个分隔条的总宽
+  static const double _resizeHandleWidth = 4;
+
   // 面板可见性
   bool _leftPanelOpen = true;
   bool _rightPanelOpen = true;
@@ -32,6 +46,25 @@ class _HomePageState extends State<HomePage> {
 
   // 拖拽状态
   bool _dragging = false;
+
+  /// 按窗口宽度算出两侧面板实际能占的宽度（只影响显示，不改用户的面板开关状态）。
+  ///
+  /// 窗口宽到装得下 280 + 320 + 中央 320 时就是原值；再窄就等比压缩，
+  /// 压到不足 [_minPanelWidth] 直接不给这块地。
+  ({double left, double right}) _panelWidths(double totalWidth) {
+    var left = _leftPanelOpen ? _leftPanelWidth : 0.0;
+    var right = _rightPanelOpen ? _rightPanelWidth : 0.0;
+    final desired = left + right;
+    final budget = totalWidth - _resizeHandleWidth * 2 - _minCenterWidth;
+    if (desired == 0 || budget >= desired) return (left: left, right: right);
+
+    final factor = budget <= 0 ? 0.0 : budget / desired;
+    left *= factor;
+    right *= factor;
+    if (left < _minPanelWidth) left = 0;
+    if (right < _minPanelWidth) right = 0;
+    return (left: left, right: right);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,35 +80,40 @@ class _HomePageState extends State<HomePage> {
       child: Stack(
         children: [
           Scaffold(
-            body: Row(
-              children: [
-                // ═══ 左面板 ═══
-                if (_leftPanelOpen)
-                  SizedBox(
-                    width: 280,
-                    child: _buildLeftPanel(),
-                  ),
+            body: LayoutBuilder(
+              builder: (context, constraints) {
+                final panels = _panelWidths(constraints.maxWidth);
+                return Row(
+                  children: [
+                    // ═══ 左面板 ═══
+                    if (_leftPanelOpen && panels.left > 0)
+                      SizedBox(
+                        width: panels.left,
+                        child: _buildLeftPanel(),
+                      ),
 
-                // 分隔条
-                _buildResizeHandle(() {
-                  setState(() => _leftPanelOpen = !_leftPanelOpen);
-                }),
+                    // 分隔条
+                    _buildResizeHandle(() {
+                      setState(() => _leftPanelOpen = !_leftPanelOpen);
+                    }),
 
-                // ═══ 中央主区域 ═══
-                Expanded(child: _buildCenter()),
+                    // ═══ 中央主区域 ═══
+                    Expanded(child: _buildCenter()),
 
-                // 分隔条
-                _buildResizeHandle(() {
-                  setState(() => _rightPanelOpen = !_rightPanelOpen);
-                }),
+                    // 分隔条
+                    _buildResizeHandle(() {
+                      setState(() => _rightPanelOpen = !_rightPanelOpen);
+                    }),
 
-                // ═══ 右面板 ═══
-                if (_rightPanelOpen)
-                  SizedBox(
-                    width: 320,
-                    child: const ImageDetail(),
-                  ),
-              ],
+                    // ═══ 右面板 ═══
+                    if (_rightPanelOpen && panels.right > 0)
+                      SizedBox(
+                        width: panels.right,
+                        child: const ImageDetail(),
+                      ),
+                  ],
+                );
+              },
             ),
           ),
           // 拖拽提示覆盖层
@@ -293,71 +331,152 @@ class _TopToolbarState extends State<_TopToolbar> {
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       color: Catppuccin.mantle,
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _ctrl,
-              onChanged: _onSearchChanged,
-              decoration: const InputDecoration(
-                hintText: '搜索文件名...',
-                prefixIcon: Icon(Icons.search, size: 18),
-                isDense: true,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 行内摆下「搜索框 + 排序 + 5 个动作」要 320 宽（6 个 48 的控件 + 间距 + 内边距）。
+          // 不够宽还硬摆就会把这一行撑破——窗口 900 宽、左右面板都开着时中央只剩 292。
+          final compact = constraints.maxWidth < 360;
+          return Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _ctrl,
+                  onChanged: _onSearchChanged,
+                  decoration: const InputDecoration(
+                    hintText: '搜索文件名...',
+                    prefixIcon: Icon(Icons.search, size: 18),
+                    isDense: true,
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  ),
+                  style: const TextStyle(fontSize: 13),
+                ),
               ),
-              style: const TextStyle(fontSize: 13),
-            ),
-          ),
-          const SizedBox(width: 8),
-          PopupMenuButton<String>(
-            tooltip: '排序方式',
-            icon: const Icon(Icons.sort, size: 18),
-            onSelected: (v) => appState.setSortKey(v),
-            itemBuilder: (_) => [
-              _sortItem('添加时间', 'added_at', appState.sortKey),
-              _sortItem('文件名', 'filename', appState.sortKey),
-              _sortItem('别名', 'alias', appState.sortKey),
-              _sortItem('文件大小', 'file_size', appState.sortKey),
-              _sortItem('修改时间', 'file_mtime', appState.sortKey),
+              if (compact) ...[
+                const SizedBox(width: 8),
+                PopupMenuButton<String>(
+                  tooltip: '更多',
+                  icon: const Icon(Icons.more_horiz, size: 18),
+                  onSelected: (v) => _onCompactSelected(appState, v),
+                  itemBuilder: (_) => _compactItems(appState),
+                ),
+              ] else ...[
+                const SizedBox(width: 8),
+                PopupMenuButton<String>(
+                  tooltip: '排序方式',
+                  icon: const Icon(Icons.sort, size: 18),
+                  onSelected: (v) => appState.setSortKey(v),
+                  itemBuilder: (_) => [
+                    _sortItem('添加时间', 'added_at', appState.sortKey),
+                    _sortItem('文件名', 'filename', appState.sortKey),
+                    _sortItem('别名', 'alias', appState.sortKey),
+                    _sortItem('文件大小', 'file_size', appState.sortKey),
+                    _sortItem('修改时间', 'file_mtime', appState.sortKey),
+                  ],
+                ),
+                IconButton(
+                  icon: Icon(
+                    appState.sortDescending
+                        ? Icons.arrow_downward
+                        : Icons.arrow_upward,
+                    size: 18,
+                  ),
+                  tooltip: appState.sortDescending ? '降序（点击切换升序）' : '升序（点击切换降序）',
+                  onPressed: () =>
+                      appState.setSortDescending(!appState.sortDescending),
+                ),
+                IconButton(
+                  icon: Icon(
+                    appState.viewMode == 'grid'
+                        ? Icons.view_list
+                        : Icons.grid_view,
+                    size: 18,
+                  ),
+                  tooltip: appState.viewMode == 'grid' ? '切换到列表' : '切换到网格',
+                  onPressed: () => appState
+                      .setViewMode(appState.viewMode == 'grid' ? 'list' : 'grid'),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.filter_list, size: 18),
+                  color: appState.hasAdvancedFilter ? Catppuccin.mauve : null,
+                  tooltip: '高级筛选',
+                  onPressed: () => AdvancedFilterDialog.show(context),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh, size: 18),
+                  tooltip: '刷新',
+                  onPressed: () => appState.refresh(),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.settings_outlined, size: 18),
+                  tooltip: '设置',
+                  onPressed: () => SettingsDialog.show(context),
+                ),
+              ],
             ],
-          ),
-          IconButton(
-            icon: Icon(
-              appState.sortDescending ? Icons.arrow_downward : Icons.arrow_upward,
-              size: 18,
-            ),
-            tooltip: appState.sortDescending ? '降序（点击切换升序）' : '升序（点击切换降序）',
-            onPressed: () => appState.setSortDescending(!appState.sortDescending),
-          ),
-          IconButton(
-            icon: Icon(
-              appState.viewMode == 'grid' ? Icons.view_list : Icons.grid_view,
-              size: 18,
-            ),
-            tooltip: appState.viewMode == 'grid' ? '切换到列表' : '切换到网格',
-            onPressed: () =>
-                appState.setViewMode(appState.viewMode == 'grid' ? 'list' : 'grid'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.filter_list, size: 18),
-            color: appState.hasAdvancedFilter ? Catppuccin.mauve : null,
-            tooltip: '高级筛选',
-            onPressed: () => AdvancedFilterDialog.show(context),
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh, size: 18),
-            tooltip: '刷新',
-            onPressed: () => appState.refresh(),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined, size: 18),
-            tooltip: '设置',
-            onPressed: () => SettingsDialog.show(context),
-          ),
-        ],
+          );
+        },
       ),
     );
+  }
+
+  /// 窄窗口下的单一入口：排序、升降序、视图、筛选、刷新、设置全收进这个菜单。
+  List<PopupMenuEntry<String>> _compactItems(AppState appState) {
+    const sorts = <(String, String)>[
+      ('added_at', '添加时间'),
+      ('filename', '文件名'),
+      ('alias', '别名'),
+      ('file_size', '文件大小'),
+      ('file_mtime', '修改时间'),
+    ];
+    return [
+      for (final (key, label) in sorts)
+        CheckedPopupMenuItem<String>(
+          value: 'sort:$key',
+          checked: appState.sortKey == key,
+          child: Text(label, style: const TextStyle(fontSize: 12)),
+        ),
+      const PopupMenuDivider(),
+      PopupMenuItem<String>(
+        value: 'toggle:descending',
+        child: Text(appState.sortDescending ? '改为升序' : '改为降序',
+            style: const TextStyle(fontSize: 12)),
+      ),
+      PopupMenuItem<String>(
+        value: 'toggle:view',
+        child: Text(appState.viewMode == 'grid' ? '切换到列表' : '切换到网格',
+            style: const TextStyle(fontSize: 12)),
+      ),
+      const PopupMenuDivider(),
+      const PopupMenuItem<String>(
+        value: 'filter',
+        child: Text('高级筛选', style: TextStyle(fontSize: 12)),
+      ),
+      const PopupMenuItem<String>(
+        value: 'refresh',
+        child: Text('刷新', style: TextStyle(fontSize: 12)),
+      ),
+      const PopupMenuItem<String>(
+        value: 'settings',
+        child: Text('设置', style: TextStyle(fontSize: 12)),
+      ),
+    ];
+  }
+
+  void _onCompactSelected(AppState appState, String value) {
+    if (value.startsWith('sort:')) {
+      appState.setSortKey(value.substring('sort:'.length));
+    } else if (value == 'toggle:descending') {
+      appState.setSortDescending(!appState.sortDescending);
+    } else if (value == 'toggle:view') {
+      appState.setViewMode(appState.viewMode == 'grid' ? 'list' : 'grid');
+    } else if (value == 'filter') {
+      AdvancedFilterDialog.show(context);
+    } else if (value == 'refresh') {
+      appState.refresh();
+    } else if (value == 'settings') {
+      SettingsDialog.show(context);
+    }
   }
 
   PopupMenuItem<String> _sortItem(String label, String key, String current) {
@@ -433,45 +552,51 @@ class _SelectionBar extends StatelessWidget {
       height: 36,
       padding: const EdgeInsets.symmetric(horizontal: 8),
       color: Catppuccin.surface0,
-      child: Row(
-        children: [
-          Text('已选 ${appState.selectedIds.length} 项',
-              style: const TextStyle(fontSize: 11, color: Catppuccin.overlay1)),
-          const SizedBox(width: 12),
-          TextButton.icon(
-            onPressed: () async {
-              final tags = await showTagPickerDialog(context, title: '批量添加标签');
-              if (tags != null && tags.isNotEmpty) {
-                await appState.addTagsToImages(appState.selectedIds, tags);
-              }
-            },
-            icon: const Icon(Icons.sell_outlined, size: 14),
-            label: const Text('添加标签', style: TextStyle(fontSize: 12)),
-            style: TextButton.styleFrom(foregroundColor: Catppuccin.mauve),
-          ),
-          const SizedBox(width: 4),
-          TextButton.icon(
-            onPressed: () async {
-              final ids = await appState.getTagIdsOnImages(appState.selectedIds);
-              if (!context.mounted) return;
-              final tags = await showTagPickerDialog(context,
-                  title: '批量移除标签', filterTagIds: ids);
-              if (tags != null && tags.isNotEmpty) {
-                await appState.removeTagsFromImages(appState.selectedIds, tags);
-              }
-            },
-            icon: const Icon(Icons.label_off_outlined, size: 14),
-            label: const Text('移除标签', style: TextStyle(fontSize: 12)),
-            style: TextButton.styleFrom(foregroundColor: Catppuccin.red),
-          ),
-          const Spacer(),
-          TextButton.icon(
-            onPressed: () => appState.clearSelection(),
-            icon: const Icon(Icons.close, size: 14),
-            label: const Text('清除选择', style: TextStyle(fontSize: 12)),
-            style: TextButton.styleFrom(foregroundColor: Catppuccin.overlay1),
-          ),
-        ],
+      // 窄窗口下这一条放不下就横向滚动，别把 Row 撑破（原来这里还有个 Spacer，
+      // 它在不定宽的行里没有意义，换成一个固定间距）。
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('已选 ${appState.selectedIds.length} 项',
+                style: const TextStyle(fontSize: 11, color: Catppuccin.overlay1)),
+            const SizedBox(width: 12),
+            TextButton.icon(
+              onPressed: () async {
+                final tags = await showTagPickerDialog(context, title: '批量添加标签');
+                if (tags != null && tags.isNotEmpty) {
+                  await appState.addTagsToImages(appState.selectedIds, tags);
+                }
+              },
+              icon: const Icon(Icons.sell_outlined, size: 14),
+              label: const Text('添加标签', style: TextStyle(fontSize: 12)),
+              style: TextButton.styleFrom(foregroundColor: Catppuccin.mauve),
+            ),
+            const SizedBox(width: 4),
+            TextButton.icon(
+              onPressed: () async {
+                final ids = await appState.getTagIdsOnImages(appState.selectedIds);
+                if (!context.mounted) return;
+                final tags = await showTagPickerDialog(context,
+                    title: '批量移除标签', filterTagIds: ids);
+                if (tags != null && tags.isNotEmpty) {
+                  await appState.removeTagsFromImages(appState.selectedIds, tags);
+                }
+              },
+              icon: const Icon(Icons.label_off_outlined, size: 14),
+              label: const Text('移除标签', style: TextStyle(fontSize: 12)),
+              style: TextButton.styleFrom(foregroundColor: Catppuccin.red),
+            ),
+            const SizedBox(width: 16),
+            TextButton.icon(
+              onPressed: () => appState.clearSelection(),
+              icon: const Icon(Icons.close, size: 14),
+              label: const Text('清除选择', style: TextStyle(fontSize: 12)),
+              style: TextButton.styleFrom(foregroundColor: Catppuccin.overlay1),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -490,8 +615,12 @@ class _BreadcrumbBar extends StatelessWidget {
       height: 32,
       padding: const EdgeInsets.symmetric(horizontal: 8),
       color: Catppuccin.mantle,
-      child: Row(
-        children: [
+      // 路径深了面包屑会比窗口还宽，横向滚动兜住（原来是一条 Row 直接铺）。
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
           IconButton(
             onPressed: crumb.length <= 1 ? null : () => appState.goUp(),
             icon: const Icon(Icons.arrow_upward, size: 15),
@@ -536,7 +665,8 @@ class _BreadcrumbBar extends StatelessWidget {
               ),
             ),
           ],
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -568,9 +698,13 @@ class _BottomStatusBar extends StatelessWidget {
       color: Catppuccin.mantle,
       child: Row(
         children: [
-          Text(
-            leftText,
-            style: const TextStyle(color: Catppuccin.overlay1, fontSize: 11),
+          Flexible(
+            child: Text(
+              leftText,
+              style: const TextStyle(color: Catppuccin.overlay1, fontSize: 11),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
           const Spacer(),
           if (appState.importing)
